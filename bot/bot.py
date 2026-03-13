@@ -974,6 +974,10 @@ textarea{min-height:80px;resize:vertical}
 .checkbox-row{display:flex;align-items:center;gap:10px}
 .checkbox-row input{width:auto}
 .img-preview{width:100%;max-height:200px;object-fit:cover;border-radius:8px;margin-top:8px;display:none}
+.upload-btn{display:inline-flex;align-items:center;gap:6px;padding:8px 14px;background:#f0f4fb;border:1.5px solid #dde4ee;border-radius:8px;font-size:.85rem;font-weight:600;color:#1a5fa8;cursor:pointer;transition:background .15s}
+.upload-btn:hover{background:#dde8f8}
+.upload-btn input[type=file]{display:none}
+.upload-status{font-size:.8rem;margin-top:4px;min-height:18px}
 .filters{display:flex;gap:10px;margin-bottom:20px;align-items:center;flex-wrap:wrap}
 .filters a{padding:7px 16px;border-radius:999px;font-size:.85rem;font-weight:600;text-decoration:none;border:1.5px solid #dde4ee;color:#5a6375}
 .filters a.active{background:#1a5fa8;color:#fff;border-color:#1a5fa8}
@@ -1070,8 +1074,15 @@ def _pet_form_html(pet: dict | None = None, error: str = "") -> str:
     <textarea name="description">{v('description')}</textarea>
   </div>
   <div class="form-group">
-    <label>Фото (URL)</label>
-    <input type="url" name="image" value="{v('image')}" id="imgUrl" oninput="previewImg(this.value)">
+    <label>Фото</label>
+    <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap">
+      <input type="url" name="image" value="{v('image')}" id="imgUrl" oninput="previewImg(this.value)" placeholder="https://..." style="flex:1;min-width:200px">
+      <label class="upload-btn" title="Загрузить фото">
+        📷 Загрузить
+        <input type="file" accept="image/*" id="imgUpload" onchange="uploadPhoto(this)">
+      </label>
+    </div>
+    <div class="upload-status" id="uploadStatus"></div>
     <img id="imgPreview" class="img-preview" src="{v('image')}" alt="">
   </div>
   <div class="form-row">
@@ -1121,6 +1132,33 @@ window.onload = function() {{
   var url = document.getElementById('imgUrl').value;
   if (url) previewImg(url);
 }};
+async function uploadPhoto(input) {{
+  if (!input.files || !input.files[0]) return;
+  var file = input.files[0];
+  var status = document.getElementById('uploadStatus');
+  status.textContent = '⏳ Загружаю...';
+  status.style.color = '#5a6375';
+  try {{
+    var form = new FormData();
+    form.append('file', file);
+    var resp = await fetch('https://telegra.ph/upload', {{ method: 'POST', body: form }});
+    var data = await resp.json();
+    if (data && data[0] && data[0].src) {{
+      var url = 'https://telegra.ph' + data[0].src;
+      document.getElementById('imgUrl').value = url;
+      previewImg(url);
+      status.textContent = '✅ Загружено';
+      status.style.color = '#1c8a4e';
+    }} else {{
+      status.textContent = '❌ Ошибка: ' + JSON.stringify(data);
+      status.style.color = '#c0392b';
+    }}
+  }} catch(e) {{
+    status.textContent = '❌ Ошибка загрузки';
+    status.style.color = '#c0392b';
+  }}
+  input.value = '';
+}}
 </script>"""
     return _admin_layout(title, body)
 
