@@ -1138,11 +1138,7 @@ function renderHowto() {
       if (state.config && state.config.links && state.config.links.add_for_sale_url_template) {
         url = state.config.links.add_for_sale_url_template.replace('{mode}', state.mode);
       }
-      try {
-        tg.openLink(url);
-      } catch (_) {
-        window.open(url, '_blank');
-      }
+      window.location.href = url;
     };
   }
 }
