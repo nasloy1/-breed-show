@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#1a5fa8">
+  <title>Breed Show</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- ======= HEADER ======= -->
+  <header class="app-header" id="appHeader">
+    <button class="header-back" id="headerBack" aria-label="Назад" hidden>
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+        <path d="M15 18L9 12L15 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+    <span class="header-title" id="headerTitle">Breed Show</span>
+    <button class="header-filter-btn" id="headerFilterBtn" aria-label="Фильтры" hidden>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+        <path d="M22 3H2L10 12.46V19L14 21V12.46L22 3Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span class="filter-badge" id="filterBadge" hidden></span>
+    </button>
+  </header>
+
+  <!-- ======= PAGES ======= -->
+  <main class="page-container" id="pageContainer">
+
+    <!-- CATALOG PAGE -->
+    <section class="page" id="pageCatalog" data-page="catalog">
+      <div class="pet-grid" id="petGrid">
+        <!-- filled by JS -->
+      </div>
+    </section>
+
+    <!-- FILTERS PAGE -->
+    <section class="page page--hidden" id="pageFilters" data-page="filters">
+      <div class="filters-body">
+
+        <div class="filter-section">
+          <label class="filter-label" for="filterBreed">Порода</label>
+          <input
+            class="filter-input"
+            type="text"
+            id="filterBreed"
+            placeholder="Например: мейн-кун"
+            autocomplete="off"
+          >
+        </div>
+
+        <div class="filter-section">
+          <label class="filter-label">Пол</label>
+          <div class="gender-chips" id="genderChips">
+            <!-- filled dynamically by JS based on mode -->
+          </div>
+        </div>
+
+        <div class="filter-section">
+          <label class="filter-label">Цена, ₽</label>
+          <div class="range-inputs">
+            <input class="filter-input range-input" type="number" id="filterPriceMin" placeholder="от" min="0">
+            <span class="range-sep">—</span>
+            <input class="filter-input range-input" type="number" id="filterPriceMax" placeholder="до" min="0">
+          </div>
+        </div>
+
+        <div class="filter-section">
+          <label class="filter-label">Возраст, мес.</label>
+          <div class="range-inputs">
+            <input class="filter-input range-input" type="number" id="filterAgeMin" placeholder="от" min="0">
+            <span class="range-sep">—</span>
+            <input class="filter-input range-input" type="number" id="filterAgeMax" placeholder="до" min="0">
+          </div>
+        </div>
+
+        <div class="filter-section filter-section--toggle">
+          <label class="filter-label" for="filterAvailable">Только доступные</label>
+          <label class="toggle-switch">
+            <input type="checkbox" id="filterAvailable">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+      </div><!-- /filters-body -->
+
+      <div class="filters-footer">
+        <button class="btn btn--outline" id="btnResetFilters">Сбросить</button>
+        <button class="btn btn--primary" id="btnApplyFilters">Применить</button>
+      </div>
+    </section>
+
+    <!-- DETAIL PAGE -->
+    <section class="page page--hidden" id="pageDetail" data-page="detail">
+      <div id="detailContent">
+        <!-- filled by JS -->
+      </div>
+    </section>
+
+    <!-- SAVED PAGE -->
+    <section class="page page--hidden" id="pageSaved" data-page="saved">
+      <div class="pet-grid" id="savedGrid">
+        <!-- filled by JS -->
+      </div>
+    </section>
+
+    <!-- HOWTO PAGE -->
+    <section class="page page--hidden" id="pageHowto" data-page="howto">
+      <div class="howto-body">
+
+        <div class="howto-header">
+          <div class="howto-logo">🐾</div>
+          <h2 class="howto-title">Как пользоваться Breed Show</h2>
+          <p class="howto-subtitle">Найдите питомца своей мечты за несколько шагов</p>
+        </div>
+
+        <div class="howto-steps">
+          <div class="howto-step">
+            <div class="howto-step__icon">🔍</div>
+            <div class="howto-step__body">
+              <div class="howto-step__num">Шаг 1</div>
+              <div class="howto-step__title">Найдите животное</div>
+              <div class="howto-step__desc">
+                Листайте каталог или используйте фильтры по породе, полу, цене и возрасту.
+              </div>
+            </div>
+          </div>
+
+          <div class="howto-step">
+            <div class="howto-step__icon">📋</div>
+            <div class="howto-step__body">
+              <div class="howto-step__num">Шаг 2</div>
+              <div class="howto-step__title">Откройте карточку</div>
+              <div class="howto-step__desc">
+                Нажмите на питомца, чтобы увидеть подробное описание, фото и информацию о питомнике.
+              </div>
+            </div>
+          </div>
+
+          <div class="howto-step">
+            <div class="howto-step__icon">💬</div>
+            <div class="howto-step__body">
+              <div class="howto-step__num">Шаг 3</div>
+              <div class="howto-step__title">Свяжитесь с заводчиком</div>
+              <div class="howto-step__desc">
+                Напишите в Telegram, позвоните или отправьте email прямо из карточки питомца.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="howto-actions">
+          <button class="btn btn--primary howto-add-btn" id="btnAddForSale">
+            🐾 Добавить на продажу
+          </button>
+          <p class="howto-add-hint">Вы заводчик? Разместите своих питомцев бесплатно.</p>
+        </div>
+
+      </div>
+    </section>
+
+  </main><!-- /page-container -->
+
+  <!-- ======= TAB BAR ======= -->
+  <nav class="tab-bar" id="tabBar">
+    <button class="tab-item tab-item--active" data-tab="catalog" id="tabCatalog">
+      <span class="tab-icon">🏠</span>
+      <span class="tab-label">Каталог</span>
+    </button>
+    <button class="tab-item" data-tab="saved" id="tabSaved">
+      <span class="tab-icon">⭐</span>
+      <span class="tab-label">Сохранённые</span>
+      <span class="tab-badge" id="tabSavedBadge" hidden></span>
+    </button>
+    <button class="tab-item" data-tab="howto" id="tabHowto">
+      <span class="tab-icon">❓</span>
+      <span class="tab-label">Как пользоваться</span>
+    </button>
+  </nav>
+
+  <!-- ======= TOAST ======= -->
+  <div class="toast" id="toast" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
