@@ -289,8 +289,36 @@ def init_db() -> None:
             extra TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
+
+        CREATE TABLE IF NOT EXISTS subscriptions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tg_user_id TEXT NOT NULL,
+            mode TEXT NOT NULL DEFAULT 'cats',
+            breed TEXT,
+            label TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS notification_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tg_user_id TEXT NOT NULL,
+            pet_id TEXT NOT NULL,
+            sent_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(tg_user_id, pet_id)
+        );
     """)
     conn.commit()
+
+    # Migrations: add new columns if they don't exist yet
+    for col, definition in [
+        ("show_to_subscribers", "INTEGER NOT NULL DEFAULT 0"),
+        ("created_at", "TEXT NOT NULL DEFAULT (datetime('now'))"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE pets ADD COLUMN {col} {definition}")
+            conn.commit()
+        except Exception:
+            pass  # column already exists
 
     count = cur.execute("SELECT COUNT(*) FROM pets").fetchone()[0]
     if count == 0:
@@ -320,6 +348,7 @@ def row_to_dict(row) -> dict:
     d["available"] = bool(d.get("available", 1))
     d["is_promoted"] = bool(d.get("is_promoted", 0))
     d["has_kennel_landing"] = bool(d.get("has_kennel_landing", 0))
+    d["show_to_subscribers"] = bool(d.get("show_to_subscribers", 0))
     return d
 
 
@@ -716,6 +745,186 @@ def build_application(token: str, bot_mode: str) -> Application:
 
 
 # ---------------------------------------------------------------------------
+# Subscription API handlers
+# ---------------------------------------------------------------------------
+
+async def handle_get_subscriptions(request: web.Request) -> web.Response:
+    user_id = await get_tg_user_id(request)
+    if user_id is None:
+        return json_response({"error": "unauthorized"}, status=401)
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id, mode, breed, label, created_at FROM subscriptions WHERE tg_user_id=? ORDER BY id DESC",
+        (str(user_id),),
+    ).fetchall()
+    conn.close()
+    return json_response([dict(r) for r in rows])
+
+
+async def handle_create_subscription(request: web.Request) -> web.Response:
+    user_id = await get_tg_user_id(request)
+    if user_id is None:
+        return json_response({"error": "unauthorized"}, status=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return json_response({"error": "invalid json"}, status=400)
+
+    mode = body.get("mode", "cats")
+    breed = (body.get("breed") or "").strip() or None
+    label = (body.get("label") or "").strip()[:128]
+    if not label:
+        label = f"Новые {'котята' if mode == 'cats' else 'щенки'}" + (f" · {breed}" if breed else "")
+
+    conn = get_db()
+    # Prevent duplicates for same user+mode+breed
+    existing = conn.execute(
+        "SELECT id FROM subscriptions WHERE tg_user_id=? AND mode=? AND (breed=? OR (breed IS NULL AND ? IS NULL))",
+        (str(user_id), mode, breed, breed),
+    ).fetchone()
+    if existing:
+        conn.close()
+        return json_response({"id": existing["id"], "already_exists": True})
+
+    cur = conn.execute(
+        "INSERT INTO subscriptions (tg_user_id, mode, breed, label) VALUES (?,?,?,?)",
+        (str(user_id), mode, breed, label),
+    )
+    conn.commit()
+    sub_id = cur.lastrowid
+    conn.close()
+    return json_response({"id": sub_id, "label": label})
+
+
+async def handle_delete_subscription(request: web.Request) -> web.Response:
+    user_id = await get_tg_user_id(request)
+    if user_id is None:
+        return json_response({"error": "unauthorized"}, status=401)
+    sub_id = request.match_info["id"]
+    conn = get_db()
+    conn.execute("DELETE FROM subscriptions WHERE id=? AND tg_user_id=?", (sub_id, str(user_id)))
+    conn.commit()
+    conn.close()
+    return json_response({"ok": True})
+
+
+async def handle_demand_breeds(request: web.Request) -> web.Response:
+    mode = request.rel_url.query.get("mode", "")
+    conn = get_db()
+    if mode:
+        rows = conn.execute(
+            """SELECT breed, COUNT(*) as count FROM subscriptions
+               WHERE mode=? AND breed IS NOT NULL
+               GROUP BY breed ORDER BY count DESC LIMIT 50""",
+            (mode,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """SELECT breed, mode, COUNT(*) as count FROM subscriptions
+               WHERE breed IS NOT NULL
+               GROUP BY breed, mode ORDER BY count DESC LIMIT 50"""
+        ).fetchall()
+    conn.close()
+    return json_response([dict(r) for r in rows])
+
+
+# ---------------------------------------------------------------------------
+# Notification helpers
+# ---------------------------------------------------------------------------
+
+async def send_pet_notification(bot, tg_user_id: str, pet: dict) -> None:
+    mode = pet.get("mode", "cats")
+    age = pet.get("age_months", 0)
+    price = pet.get("price", 0)
+    price_str = f"{price:,}".replace(",", "\u00a0") + "\u00a0₽" if price else ""
+
+    text = (
+        f"🔔 <b>Новый питомец по вашей подписке!</b>\n\n"
+        f"<b>{pet.get('name', '')}</b> — {pet.get('breed', '')}\n"
+        f"{age}\u00a0мес.{f'  ·  {price_str}' if price_str else ''}\n"
+    )
+    if pet.get("color"):
+        text += f"Окрас: {pet['color']}\n"
+
+    pet_id = pet.get("id", "")
+    mini_app_url = MINI_APP_URL.rstrip("/")
+    url = f"{mini_app_url}?mode={mode}&pet_id={pet_id}"
+
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Смотреть →", web_app=WebAppInfo(url=url))]
+    ])
+
+    if pet.get("image"):
+        await bot.send_photo(
+            chat_id=int(tg_user_id),
+            photo=pet["image"],
+            caption=text,
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
+    else:
+        await bot.send_message(
+            chat_id=int(tg_user_id),
+            text=text,
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
+
+
+async def notify_subscribers_for_pet(pet: dict, tg_apps: list) -> None:
+    if not tg_apps:
+        return
+    pet_id = str(pet.get("id", ""))
+    mode = pet.get("mode", "cats")
+    breed = (pet.get("breed") or "").lower()
+
+    # Pick the right bot for this mode
+    bot = None
+    for app in tg_apps:
+        app_mode = "cats" if BOT_TOKEN_CATS and app.bot.token == BOT_TOKEN_CATS else "dogs"
+        if app_mode == mode:
+            bot = app.bot
+            break
+    if not bot:
+        bot = tg_apps[0].bot  # fallback
+
+    conn = get_db()
+    subs = conn.execute(
+        "SELECT id, tg_user_id, breed FROM subscriptions WHERE mode=?",
+        (mode,),
+    ).fetchall()
+
+    for sub in subs:
+        # Match breed filter
+        sub_breed = (sub["breed"] or "").lower()
+        if sub_breed and sub_breed not in breed and breed not in sub_breed:
+            continue
+
+        uid = sub["tg_user_id"]
+        # Check dedup
+        already = conn.execute(
+            "SELECT 1 FROM notification_log WHERE tg_user_id=? AND pet_id=?",
+            (uid, pet_id),
+        ).fetchone()
+        if already:
+            continue
+
+        try:
+            await send_pet_notification(bot, uid, pet)
+            conn.execute(
+                "INSERT OR IGNORE INTO notification_log (tg_user_id, pet_id) VALUES (?,?)",
+                (uid, pet_id),
+            )
+            conn.commit()
+            logger.info("Notified user %s about pet %s", uid, pet_id)
+        except Exception as e:
+            logger.warning("Failed to notify user %s: %s", uid, e)
+
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
 # Admin panel helpers
 # ---------------------------------------------------------------------------
 
@@ -894,6 +1103,7 @@ def _pet_form_html(pet: dict | None = None, error: str = "") -> str:
     <label class="checkbox-row"><input type="checkbox" name="available" {chk('available')}> Доступен</label>
     <label class="checkbox-row"><input type="checkbox" name="is_promoted" {chk('is_promoted')}> 🔥 ТОП</label>
     <label class="checkbox-row"><input type="checkbox" name="has_kennel_landing" {chk('has_kennel_landing')}> ⭐ Питомник</label>
+    <label class="checkbox-row"><input type="checkbox" name="show_to_subscribers" {chk('show_to_subscribers')}> 🔔 Показывать подписчикам</label>
   </div>
   <div style="display:flex;gap:10px">
     <button type="submit" class="btn btn-primary">💾 Сохранить</button>
@@ -1066,12 +1276,14 @@ async def handle_admin_pet_new_post(request: web.Request) -> web.Response:
         return web.Response(text=_pet_form_html(dict(data), "Имя и порода обязательны"), content_type="text/html")
 
     pet_id = str(int(time.time() * 1000))
+    show_to_subs = 1 if data.get("show_to_subscribers") else 0
     conn = get_db()
     try:
         conn.execute(
             """INSERT INTO pets (id,name,breed,mode,age_months,gender,price,color,description,
-            image,available,telegram_url,phone,email,is_promoted,has_kennel_landing,kennel_name,kennel_id)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            image,available,telegram_url,phone,email,is_promoted,has_kennel_landing,kennel_name,kennel_id,
+            show_to_subscribers,created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))""",
             (
                 pet_id,
                 data.get("name", "").strip(),
@@ -1091,11 +1303,21 @@ async def handle_admin_pet_new_post(request: web.Request) -> web.Response:
                 1 if data.get("has_kennel_landing") else 0,
                 data.get("kennel_name", "").strip(),
                 data.get("kennel_id", "").strip(),
+                show_to_subs,
             ),
         )
         conn.commit()
+        if show_to_subs:
+            row = conn.execute("SELECT * FROM pets WHERE id=?", (pet_id,)).fetchone()
+            pet_dict = row_to_dict(row) if row else {}
     finally:
         conn.close()
+
+    if show_to_subs and pet_dict:
+        from aiohttp.web import Application as WebApp
+        tg_apps_ref = getattr(handle_admin_pet_new_post, "_tg_apps", [])
+        asyncio.create_task(notify_subscribers_for_pet(pet_dict, tg_apps_ref))
+
     raise web.HTTPFound("/admin/pets")
 
 
@@ -1133,7 +1355,8 @@ async def handle_admin_pet_edit_post(request: web.Request) -> web.Response:
         conn.execute(
             """UPDATE pets SET name=?,breed=?,mode=?,age_months=?,gender=?,price=?,color=?,
             description=?,image=?,available=?,telegram_url=?,phone=?,email=?,
-            is_promoted=?,has_kennel_landing=?,kennel_name=?,kennel_id=? WHERE id=?""",
+            is_promoted=?,has_kennel_landing=?,kennel_name=?,kennel_id=?,
+            show_to_subscribers=? WHERE id=?""",
             (
                 data.get("name", "").strip(),
                 data.get("breed", "").strip(),
@@ -1152,6 +1375,7 @@ async def handle_admin_pet_edit_post(request: web.Request) -> web.Response:
                 1 if data.get("has_kennel_landing") else 0,
                 data.get("kennel_name", "").strip(),
                 data.get("kennel_id", "").strip(),
+                1 if data.get("show_to_subscribers") else 0,
                 pet_id,
             ),
         )
@@ -1257,12 +1481,20 @@ def build_web_app() -> web.Application:
     app.router.add_get("/tg/favorites", handle_get_favorites)
     app.router.add_post("/tg/favorites", handle_add_favorite)
     app.router.add_delete("/tg/favorites/{pet_id}", handle_delete_favorite)
+    app.router.add_get("/tg/subscriptions", handle_get_subscriptions)
+    app.router.add_post("/tg/subscriptions", handle_create_subscription)
+    app.router.add_delete("/tg/subscriptions/{id}", handle_delete_subscription)
+    app.router.add_get("/demand/breeds", handle_demand_breeds)
 
     # CORS preflight OPTIONS routes
-    for path in ("/health", "/analytics/event", "/tg/config", "/pets", "/tg/favorites"):
+    for path in (
+        "/health", "/analytics/event", "/tg/config", "/pets",
+        "/tg/favorites", "/tg/subscriptions", "/demand/breeds",
+    ):
         app.router.add_route("OPTIONS", path, handle_options)
     app.router.add_route("OPTIONS", "/pets/{id}", handle_options)
     app.router.add_route("OPTIONS", "/tg/favorites/{pet_id}", handle_options)
+    app.router.add_route("OPTIONS", "/tg/subscriptions/{id}", handle_options)
 
     # Admin panel routes
     app.router.add_get("/admin", handle_admin_redirect)
@@ -1324,6 +1556,9 @@ async def main() -> None:
             *[app.updater.start_polling(drop_pending_updates=True) for app in tg_apps]
         )
         logger.info("Telegram bots started (%d bot(s))", len(tg_apps))
+
+    # Share tg_apps with admin handler for triggering notifications
+    handle_admin_pet_new_post._tg_apps = tg_apps
 
     # Block forever
     try:

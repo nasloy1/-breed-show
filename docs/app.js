@@ -56,6 +56,7 @@ const state = {
   tempFilters: null,
   loading: false,
   initData: '',
+  subscriptions: [],
 };
 
 // ============================================================
@@ -234,6 +235,47 @@ function trackEvent(event, data = {}) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   }).catch(() => {});
+}
+
+// ============================================================
+//  Subscriptions
+// ============================================================
+
+function getTgUserId() {
+  return tg.initDataUnsafe?.user?.id ? String(tg.initDataUnsafe.user.id) : null;
+}
+
+async function loadSubscriptions() {
+  if (!state.initData && !getTgUserId()) return;
+  try {
+    state.subscriptions = await apiFetch('/tg/subscriptions');
+  } catch (_) {
+    state.subscriptions = [];
+  }
+}
+
+async function createSubscription(mode, breed, label) {
+  const data = await apiFetch('/tg/subscriptions', {
+    method: 'POST',
+    body: JSON.stringify({ mode, breed: breed || null, label }),
+  });
+  await loadSubscriptions();
+  return data;
+}
+
+async function deleteSubscription(id) {
+  await apiFetch(`/tg/subscriptions/${id}`, { method: 'DELETE' });
+  state.subscriptions = state.subscriptions.filter((s) => s.id !== id);
+}
+
+function getSubscriptionForBreed(breed, mode) {
+  return state.subscriptions.find(
+    (s) => s.mode === mode && (s.breed || '').toLowerCase() === (breed || '').toLowerCase()
+  ) || null;
+}
+
+function getSubscriptionForMode(mode) {
+  return state.subscriptions.find((s) => s.mode === mode && !s.breed) || null;
 }
 
 async function apiFetch(path, options = {}) {
@@ -529,6 +571,35 @@ function renderCatalog() {
     return;
   }
 
+  // Subscribe button for active filters
+  const subscribeBar = document.getElementById('catalogSubscribeBar');
+  if (subscribeBar) {
+    if (getTgUserId() && (state.filters.breed || state.filters.gender !== 'all' || state.filters.priceMin || state.filters.priceMax)) {
+      const modeSub = getSubscriptionForMode(state.mode);
+      const breedSub = state.filters.breed ? getSubscriptionForBreed(state.filters.breed, state.mode) : null;
+      const activeSub = breedSub || modeSub;
+      subscribeBar.hidden = false;
+      if (activeSub) {
+        subscribeBar.innerHTML = `<button class="subscribe-btn subscribe-btn--active subscribe-btn--bar" id="catalogSubBtn">🔔 Вы следите за этим фильтром</button>`;
+        document.getElementById('catalogSubBtn').addEventListener('click', async () => {
+          await deleteSubscription(activeSub.id);
+          showToast('Подписка отменена', 'info');
+          renderCatalog();
+        });
+      } else {
+        subscribeBar.innerHTML = `<button class="subscribe-btn subscribe-btn--bar" id="catalogSubBtn">🔔 Следить за новыми объявлениями</button>`;
+        document.getElementById('catalogSubBtn').addEventListener('click', async () => {
+          await createSubscription(state.mode, state.filters.breed || null, '');
+          showToast('Подписка создана 🔔', 'success');
+          try { tg.HapticFeedback.notificationOccurred('success'); } catch (_) {}
+          renderCatalog();
+        });
+      }
+    } else {
+      subscribeBar.hidden = true;
+    }
+  }
+
   grid.innerHTML = filtered.map((p) => renderPetCard(p)).join('');
 
   // Bind card click events
@@ -689,6 +760,12 @@ async function renderDetail(petId) {
           ` : ''}
         </div>
 
+        ${getTgUserId() ? `
+        <div class="subscribe-block" id="subscribeBlock">
+          <!-- filled after render -->
+        </div>
+        ` : ''}
+
         <div class="action-panel">
           <button class="action-panel__btn action-panel__btn--fav${isFav ? ' fav-btn--active' : ''}" id="detailFavBtn" data-fav-id="${escHtml(pet.id)}">
             ${isFav ? '⭐' : '☆'} ${isFav ? 'Сохранено' : 'Сохранить'}
@@ -739,15 +816,91 @@ async function renderDetail(petId) {
       tg.openLink(url);
     });
   }
+
+  // Subscribe button
+  const subscribeBlock = document.getElementById('subscribeBlock');
+  if (subscribeBlock && pet.breed) {
+    renderSubscribeButton(subscribeBlock, pet.mode || state.mode, pet.breed);
+  }
+}
+
+function renderSubscribeButton(container, mode, breed) {
+  const existing = getSubscriptionForBreed(breed, mode);
+  if (existing) {
+    container.innerHTML = `
+      <button class="subscribe-btn subscribe-btn--active" id="subBtn">
+        🔔 Вы следите за «${escHtml(breed)}»
+      </button>
+    `;
+    document.getElementById('subBtn').addEventListener('click', async () => {
+      try {
+        await deleteSubscription(existing.id);
+        renderSubscribeButton(container, mode, breed);
+        showToast('Подписка отменена', 'info');
+      } catch (_) {
+        showToast('Ошибка', 'error');
+      }
+    });
+  } else {
+    container.innerHTML = `
+      <button class="subscribe-btn" id="subBtn">
+        🔔 Следить за новыми «${escHtml(breed)}»
+      </button>
+    `;
+    document.getElementById('subBtn').addEventListener('click', async () => {
+      try {
+        await createSubscription(mode, breed, `Новые ${breed}`);
+        renderSubscribeButton(container, mode, breed);
+        showToast('Подписка создана 🔔', 'success');
+        try { tg.HapticFeedback.notificationOccurred('success'); } catch (_) {}
+      } catch (_) {
+        showToast('Ошибка подписки', 'error');
+      }
+    });
+  }
 }
 
 // ============================================================
 //  Render: Saved
 // ============================================================
 
+function renderSubscriptionsList() {
+  const el = document.getElementById('savedSubscriptions');
+  if (!el) return;
+  if (!getTgUserId() || state.subscriptions.length === 0) {
+    el.hidden = true;
+    return;
+  }
+  el.hidden = false;
+  const rows = state.subscriptions.map((s) => `
+    <div class="sub-item">
+      <div class="sub-item__info">
+        <div class="sub-item__label">${escHtml(s.label)}</div>
+        <div class="sub-item__meta">${s.mode === 'cats' ? '🐱 Котята' : '🐶 Щенки'}${s.breed ? ' · ' + escHtml(s.breed) : ''}</div>
+      </div>
+      <button class="sub-item__del" data-sub-id="${s.id}" aria-label="Удалить подписку">✕</button>
+    </div>
+  `).join('');
+  el.innerHTML = `
+    <div class="sub-section">
+      <div class="sub-section__title">🔔 Мои подписки</div>
+      ${rows}
+    </div>
+  `;
+  el.querySelectorAll('.sub-item__del').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      await deleteSubscription(Number(btn.dataset.subId));
+      renderSubscriptionsList();
+      showToast('Подписка удалена', 'info');
+    });
+  });
+}
+
 async function renderSaved() {
   const grid = document.getElementById('savedGrid');
   if (!grid) return;
+
+  renderSubscriptionsList();
 
   if (state.favorites.size === 0) {
     grid.innerHTML = `
@@ -1057,8 +1210,9 @@ async function init() {
   // Bind navigation events
   bindNavEvents();
 
-  // Load config (non-blocking, best-effort)
+  // Load config and subscriptions (non-blocking)
   loadConfig().catch(() => {});
+  loadSubscriptions().catch(() => {});
 
   if (petIdParam) {
     // Navigate to detail immediately, fetch pet (which may set mode)
