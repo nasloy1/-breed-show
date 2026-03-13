@@ -1141,16 +1141,15 @@ async function uploadPhoto(input) {{
   try {{
     var form = new FormData();
     form.append('file', file);
-    var resp = await fetch('https://telegra.ph/upload', {{ method: 'POST', body: form }});
+    var resp = await fetch('/admin/upload', {{ method: 'POST', body: form }});
     var data = await resp.json();
-    if (data && data[0] && data[0].src) {{
-      var url = 'https://telegra.ph' + data[0].src;
-      document.getElementById('imgUrl').value = url;
-      previewImg(url);
+    if (data && data.url) {{
+      document.getElementById('imgUrl').value = data.url;
+      previewImg(data.url);
       status.textContent = '✅ Загружено';
       status.style.color = '#1c8a4e';
     }} else {{
-      status.textContent = '❌ Ошибка: ' + JSON.stringify(data);
+      status.textContent = '❌ Ошибка: ' + (data.error || JSON.stringify(data));
       status.style.color = '#c0392b';
     }}
   }} catch(e) {{
@@ -1166,6 +1165,35 @@ async function uploadPhoto(input) {{
 # ---------------------------------------------------------------------------
 # Admin HTTP handlers
 # ---------------------------------------------------------------------------
+
+async def handle_admin_upload(request: web.Request) -> web.Response:
+    if not _admin_check(request):
+        return web.Response(text='{"error":"unauthorized"}', status=401, content_type="application/json")
+    try:
+        reader = await request.multipart()
+        field = await reader.next()
+        if not field or field.name != "file":
+            return web.Response(text='{"error":"no file"}', status=400, content_type="application/json")
+        data = await field.read()
+        filename = field.filename or "photo.jpg"
+        content_type_header = field.headers.get("Content-Type", "image/jpeg")
+    except Exception as e:
+        return web.Response(text=json.dumps({"error": str(e)}), status=400, content_type="application/json")
+
+    from aiohttp import ClientSession, FormData as AioFormData
+    try:
+        form = AioFormData()
+        form.add_field("file", data, filename=filename, content_type=content_type_header)
+        async with ClientSession() as session:
+            async with session.post("https://telegra.ph/upload", data=form) as resp:
+                result = await resp.json(content_type=None)
+        if isinstance(result, list) and result and result[0].get("src"):
+            url = "https://telegra.ph" + result[0]["src"]
+            return web.Response(text=json.dumps({"url": url}), content_type="application/json")
+        return web.Response(text=json.dumps({"error": f"telegra.ph: {result}"}), status=502, content_type="application/json")
+    except Exception as e:
+        return web.Response(text=json.dumps({"error": str(e)}), status=502, content_type="application/json")
+
 
 async def handle_admin_redirect(request: web.Request) -> web.Response:
     if _admin_check(request):
@@ -1535,6 +1563,7 @@ def build_web_app() -> web.Application:
     app.router.add_route("OPTIONS", "/tg/subscriptions/{id}", handle_options)
 
     # Admin panel routes
+    app.router.add_post("/admin/upload", handle_admin_upload)
     app.router.add_get("/admin", handle_admin_redirect)
     app.router.add_get("/admin/login", handle_admin_login_get)
     app.router.add_post("/admin/login", handle_admin_login_post)
