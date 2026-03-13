@@ -732,8 +732,10 @@ def make_start_handler(bot_mode: str):
                     "Нажмите кнопку ниже, чтобы посмотреть щенков:"
                 )
 
+            bot_username = BOT_USERNAME_CATS if bot_mode == "cats" else BOT_USERNAME_DOGS
+            bot_link = f"https://t.me/{bot_username}"
             share_text = urllib.parse.quote("Смотрите питомцев на Breed Show!")
-            share_url = f"https://t.me/share/url?url={urllib.parse.quote(url)}&text={share_text}"
+            share_url = f"https://t.me/share/url?url={urllib.parse.quote(bot_link)}&text={share_text}"
 
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton(btn_label, web_app=WebAppInfo(url=url))],
