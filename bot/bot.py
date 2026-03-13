@@ -10,6 +10,7 @@ import hmac
 import json
 import logging
 import os
+import secrets
 import sqlite3
 import time
 import urllib.parse
@@ -56,6 +57,10 @@ BOT_MODE = os.getenv("BOT_MODE", "cats")
 
 BOT_USERNAME_CATS = os.getenv("BOT_USERNAME_CATS", "kittens_buy_bot")
 BOT_USERNAME_DOGS = os.getenv("BOT_USERNAME_DOGS", "puppies_buy_bot")
+
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
+ADMIN_SESSIONS: dict[str, float] = {}  # token -> expires_at
+SESSION_DURATION = 86400  # 24 hours
 
 CORS_HEADERS = {
     "Access-Control-Allow-Origin": "*",
@@ -674,6 +679,474 @@ def build_application(token: str, bot_mode: str) -> Application:
 
 
 # ---------------------------------------------------------------------------
+# Admin panel helpers
+# ---------------------------------------------------------------------------
+
+def _admin_check(request: web.Request) -> bool:
+    token = request.cookies.get("admin_session")
+    if not token:
+        return False
+    expires = ADMIN_SESSIONS.get(token, 0)
+    if time.time() > expires:
+        ADMIN_SESSIONS.pop(token, None)
+        return False
+    return True
+
+
+_ADMIN_CSS = """
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f0f4fa;margin:0;color:#1a1d23}
+.topbar{background:#1a5fa8;color:#fff;padding:12px 24px;display:flex;align-items:center;justify-content:space-between}
+.topbar h1{margin:0;font-size:1.1rem}
+.topbar a{color:#fff;opacity:.8;text-decoration:none;font-size:.9rem}
+.topbar a:hover{opacity:1}
+.container{max-width:1100px;margin:0 auto;padding:24px}
+.card{background:#fff;border-radius:12px;box-shadow:0 2px 12px rgba(26,95,168,.09);padding:24px;margin-bottom:20px}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:9px 18px;border-radius:8px;font-size:.9rem;font-weight:600;border:none;cursor:pointer;text-decoration:none;transition:opacity .15s}
+.btn:active{opacity:.8}
+.btn-primary{background:#1a5fa8;color:#fff}
+.btn-success{background:#1c8a4e;color:#fff}
+.btn-danger{background:#c0392b;color:#fff}
+.btn-outline{background:transparent;color:#1a5fa8;border:1.5px solid #1a5fa8}
+.btn-sm{padding:5px 12px;font-size:.8rem}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;padding:10px 12px;background:#f7f9fc;font-size:.78rem;text-transform:uppercase;letter-spacing:.05em;color:#5a6375;border-bottom:1.5px solid #dde4ee}
+td{padding:10px 12px;border-bottom:1px solid #f0f4fa;font-size:.88rem;vertical-align:middle}
+tr:hover td{background:#f7f9fc}
+.badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:.72rem;font-weight:700}
+.badge-cats{background:#e8f4fd;color:#1a5fa8}
+.badge-dogs{background:#fef3e2;color:#e85c00}
+.badge-on{background:#d4f0e1;color:#1c8a4e}
+.badge-off{background:#fde8e8;color:#c0392b}
+.badge-promo{background:rgba(232,92,0,.12);color:#e85c00}
+.form-group{margin-bottom:16px}
+label{display:block;font-size:.82rem;font-weight:600;color:#5a6375;margin-bottom:6px}
+input[type=text],input[type=number],input[type=url],input[type=email],textarea,select{width:100%;padding:10px 12px;border:1.5px solid #dde4ee;border-radius:8px;font:inherit;font-size:.92rem;outline:none;box-sizing:border-box}
+input:focus,textarea:focus,select:focus{border-color:#1a5fa8}
+textarea{min-height:80px;resize:vertical}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.form-row-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
+.checkbox-row{display:flex;align-items:center;gap:10px}
+.checkbox-row input{width:auto}
+.img-preview{width:100%;max-height:200px;object-fit:cover;border-radius:8px;margin-top:8px;display:none}
+.filters{display:flex;gap:10px;margin-bottom:20px;align-items:center;flex-wrap:wrap}
+.filters a{padding:7px 16px;border-radius:999px;font-size:.85rem;font-weight:600;text-decoration:none;border:1.5px solid #dde4ee;color:#5a6375}
+.filters a.active{background:#1a5fa8;color:#fff;border-color:#1a5fa8}
+.empty{text-align:center;padding:48px;color:#8a94a6}
+"""
+
+
+def _admin_layout(title: str, body: str) -> str:
+    return f"""<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{title} — Breed Show Admin</title>
+<style>{_ADMIN_CSS}</style></head>
+<body>
+<div class="topbar">
+  <h1>🐾 Breed Show Admin</h1>
+  <a href="/admin/logout">Выйти</a>
+</div>
+<div class="container">{body}</div>
+</body></html>"""
+
+
+def _pet_form_html(pet: dict | None = None, error: str = "") -> str:
+    p = pet or {}
+    is_edit = bool(p)
+    action = f"/admin/pets/{p.get('id')}/edit" if is_edit else "/admin/pets/new"
+    title = "Редактировать питомца" if is_edit else "Добавить питомца"
+
+    def v(key, default=""):
+        return str(p.get(key, default)) if p.get(key) is not None else default
+
+    def sel(key, val):
+        return "selected" if str(p.get(key, "")) == val else ""
+
+    def chk(key):
+        return "checked" if p.get(key) else ""
+
+    err_html = f'<div style="background:#fde8e8;color:#c0392b;padding:10px 14px;border-radius:8px;margin-bottom:16px">{error}</div>' if error else ""
+
+    body = f"""
+<div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
+  <a href="/admin/pets" class="btn btn-outline btn-sm">← Назад</a>
+  <h2 style="margin:0">{title}</h2>
+</div>
+{err_html}
+<div class="card">
+<form method="post" action="{action}">
+  <div class="form-row">
+    <div class="form-group">
+      <label>Имя *</label>
+      <input type="text" name="name" value="{v('name')}" required>
+    </div>
+    <div class="form-group">
+      <label>Порода *</label>
+      <input type="text" name="breed" value="{v('breed')}" required>
+    </div>
+  </div>
+  <div class="form-row-3">
+    <div class="form-group">
+      <label>Категория</label>
+      <select name="mode">
+        <option value="cats" {sel('mode','cats')}>🐱 Котята</option>
+        <option value="dogs" {sel('mode','dogs')}>🐶 Щенки</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Пол</label>
+      <select name="gender">
+        <option value="male" {sel('gender','male')}>Кот / Кобель</option>
+        <option value="female" {sel('gender','female')}>Кошка / Сука</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Возраст (мес.)</label>
+      <input type="number" name="age_months" value="{v('age_months','0')}" min="0">
+    </div>
+  </div>
+  <div class="form-row">
+    <div class="form-group">
+      <label>Цена, ₽</label>
+      <input type="number" name="price" value="{v('price','0')}" min="0">
+    </div>
+    <div class="form-group">
+      <label>Окрас</label>
+      <input type="text" name="color" value="{v('color')}">
+    </div>
+  </div>
+  <div class="form-group">
+    <label>Описание</label>
+    <textarea name="description">{v('description')}</textarea>
+  </div>
+  <div class="form-group">
+    <label>Фото (URL)</label>
+    <input type="url" name="image" value="{v('image')}" id="imgUrl" oninput="previewImg(this.value)">
+    <img id="imgPreview" class="img-preview" src="{v('image')}" alt="">
+  </div>
+  <div class="form-row">
+    <div class="form-group">
+      <label>Telegram URL</label>
+      <input type="text" name="telegram_url" value="{v('telegram_url')}" placeholder="https://t.me/username">
+    </div>
+    <div class="form-group">
+      <label>Телефон</label>
+      <input type="text" name="phone" value="{v('phone')}" placeholder="+7 000 000-00-00">
+    </div>
+  </div>
+  <div class="form-group">
+    <label>Email</label>
+    <input type="email" name="email" value="{v('email')}">
+  </div>
+  <hr style="border:none;border-top:1px solid #dde4ee;margin:20px 0">
+  <div class="form-row">
+    <div class="form-group">
+      <label>Питомник (название)</label>
+      <input type="text" name="kennel_name" value="{v('kennel_name')}">
+    </div>
+    <div class="form-group">
+      <label>Питомник (ID для ссылки)</label>
+      <input type="text" name="kennel_id" value="{v('kennel_id')}" placeholder="my_kennel">
+    </div>
+  </div>
+  <div style="display:flex;gap:24px;flex-wrap:wrap;margin-bottom:20px">
+    <label class="checkbox-row"><input type="checkbox" name="available" {chk('available')}> Доступен</label>
+    <label class="checkbox-row"><input type="checkbox" name="is_promoted" {chk('is_promoted')}> 🔥 ТОП</label>
+    <label class="checkbox-row"><input type="checkbox" name="has_kennel_landing" {chk('has_kennel_landing')}> ⭐ Питомник</label>
+  </div>
+  <div style="display:flex;gap:10px">
+    <button type="submit" class="btn btn-primary">💾 Сохранить</button>
+    <a href="/admin/pets" class="btn btn-outline">Отмена</a>
+  </div>
+</form>
+</div>
+<script>
+function previewImg(url) {{
+  var img = document.getElementById('imgPreview');
+  if (url) {{ img.src = url; img.style.display = 'block'; }}
+  else {{ img.style.display = 'none'; }}
+}}
+window.onload = function() {{
+  var url = document.getElementById('imgUrl').value;
+  if (url) previewImg(url);
+}};
+</script>"""
+    return _admin_layout(title, body)
+
+
+# ---------------------------------------------------------------------------
+# Admin HTTP handlers
+# ---------------------------------------------------------------------------
+
+async def handle_admin_redirect(request: web.Request) -> web.Response:
+    if _admin_check(request):
+        raise web.HTTPFound("/admin/pets")
+    raise web.HTTPFound("/admin/login")
+
+
+async def handle_admin_login_get(request: web.Request) -> web.Response:
+    if _admin_check(request):
+        raise web.HTTPFound("/admin/pets")
+    error = request.rel_url.query.get("error", "")
+    err_html = f'<div style="background:#fde8e8;color:#c0392b;padding:10px 14px;border-radius:8px;margin-bottom:16px">{error}</div>' if error else ""
+    html = f"""<!DOCTYPE html>
+<html lang="ru"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Вход — Breed Show Admin</title>
+<style>{_ADMIN_CSS}
+.login-wrap{{display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f0f4fa}}
+.login-card{{background:#fff;border-radius:16px;box-shadow:0 4px 24px rgba(26,95,168,.12);padding:40px;width:100%;max-width:380px}}
+.login-logo{{text-align:center;font-size:2.5rem;margin-bottom:8px}}
+.login-title{{text-align:center;font-size:1.2rem;font-weight:800;margin-bottom:24px;color:#1a1d23}}
+</style></head>
+<body>
+<div class="login-wrap">
+  <div class="login-card">
+    <div class="login-logo">🐾</div>
+    <div class="login-title">Breed Show Admin</div>
+    {err_html}
+    <form method="post" action="/admin/login">
+      <div class="form-group">
+        <label>Пароль</label>
+        <input type="password" name="password" autofocus required>
+      </div>
+      <button type="submit" class="btn btn-primary" style="width:100%">Войти</button>
+    </form>
+  </div>
+</div>
+</body></html>"""
+    return web.Response(text=html, content_type="text/html")
+
+
+async def handle_admin_login_post(request: web.Request) -> web.Response:
+    data = await request.post()
+    password = data.get("password", "")
+    if password == ADMIN_PASSWORD:
+        token = secrets.token_hex(32)
+        ADMIN_SESSIONS[token] = time.time() + SESSION_DURATION
+        response = web.HTTPFound("/admin/pets")
+        response.set_cookie("admin_session", token, max_age=SESSION_DURATION, httponly=True)
+        raise response
+    raise web.HTTPFound("/admin/login?error=Неверный+пароль")
+
+
+async def handle_admin_logout(request: web.Request) -> web.Response:
+    token = request.cookies.get("admin_session")
+    if token:
+        ADMIN_SESSIONS.pop(token, None)
+    response = web.HTTPFound("/admin/login")
+    response.del_cookie("admin_session")
+    raise response
+
+
+async def handle_admin_pets(request: web.Request) -> web.Response:
+    if not _admin_check(request):
+        raise web.HTTPFound("/admin/login")
+
+    mode = request.rel_url.query.get("mode", "")
+    conn = get_db()
+    try:
+        if mode in ("cats", "dogs"):
+            rows = conn.execute(
+                "SELECT * FROM pets WHERE mode=? ORDER BY is_promoted DESC, id ASC", (mode,)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM pets ORDER BY mode, is_promoted DESC, id ASC"
+            ).fetchall()
+        pets = [row_to_dict(r) for r in rows]
+        total = conn.execute("SELECT COUNT(*) FROM pets").fetchone()[0]
+        cats_count = conn.execute("SELECT COUNT(*) FROM pets WHERE mode='cats'").fetchone()[0]
+        dogs_count = conn.execute("SELECT COUNT(*) FROM pets WHERE mode='dogs'").fetchone()[0]
+    finally:
+        conn.close()
+
+    active_all = "active" if not mode else ""
+    active_cats = "active" if mode == "cats" else ""
+    active_dogs = "active" if mode == "dogs" else ""
+
+    rows_html = ""
+    for p in pets:
+        cat_badge = f'<span class="badge badge-{"cats" if p["mode"]=="cats" else "dogs"}">{"🐱 Котята" if p["mode"]=="cats" else "🐶 Щенки"}</span>'
+        avail_badge = f'<span class="badge badge-{"on" if p["available"] else "off"}">{"Доступен" if p["available"] else "Недоступен"}</span>'
+        promo = '<span class="badge badge-promo">🔥 ТОП</span>' if p["is_promoted"] else ""
+        img = f'<img src="{p["image"]}" style="width:48px;height:36px;object-fit:cover;border-radius:6px">' if p["image"] else "—"
+        toggle_label = "Скрыть" if p["available"] else "Показать"
+        rows_html += f"""<tr>
+          <td>{img}</td>
+          <td><strong>{p['name']}</strong><br><span style="color:#8a94a6;font-size:.8rem">{p['breed']}</span></td>
+          <td>{cat_badge}</td>
+          <td>{p['age_months']} мес.</td>
+          <td><strong>{p['price']:,} ₽</strong></td>
+          <td>{avail_badge} {promo}</td>
+          <td>
+            <a href="/admin/pets/{p['id']}/edit" class="btn btn-outline btn-sm">✏️</a>
+            <form method="post" action="/admin/pets/{p['id']}/toggle" style="display:inline">
+              <button class="btn btn-sm" style="background:#e8f4fd;color:#1a5fa8;border:none">{toggle_label}</button>
+            </form>
+            <form method="post" action="/admin/pets/{p['id']}/delete" style="display:inline" onsubmit="return confirm('Удалить {p['name']}?')">
+              <button class="btn btn-danger btn-sm">🗑</button>
+            </form>
+          </td>
+        </tr>"""
+
+    table_html = f"""<table>
+      <thead><tr>
+        <th>Фото</th><th>Питомец</th><th>Категория</th><th>Возраст</th><th>Цена</th><th>Статус</th><th>Действия</th>
+      </tr></thead>
+      <tbody>{rows_html if rows_html else f'<tr><td colspan="7" class="empty">Питомцы не найдены</td></tr>'}</tbody>
+    </table>""" if pets else '<div class="empty">Питомцев пока нет</div>'
+
+    body = f"""
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px">
+  <h2 style="margin:0">Питомцы <span style="color:#8a94a6;font-size:.9rem">({total} всего)</span></h2>
+  <a href="/admin/pets/new" class="btn btn-primary">+ Добавить питомца</a>
+</div>
+<div class="filters">
+  <a href="/admin/pets" class="{active_all}">Все ({total})</a>
+  <a href="/admin/pets?mode=cats" class="{active_cats}">🐱 Котята ({cats_count})</a>
+  <a href="/admin/pets?mode=dogs" class="{active_dogs}">🐶 Щенки ({dogs_count})</a>
+</div>
+<div class="card" style="padding:0;overflow:hidden">{table_html}</div>"""
+
+    return web.Response(text=_admin_layout("Питомцы", body), content_type="text/html")
+
+
+async def handle_admin_pet_new_get(request: web.Request) -> web.Response:
+    if not _admin_check(request):
+        raise web.HTTPFound("/admin/login")
+    return web.Response(text=_pet_form_html(), content_type="text/html")
+
+
+async def handle_admin_pet_new_post(request: web.Request) -> web.Response:
+    if not _admin_check(request):
+        raise web.HTTPFound("/admin/login")
+    data = await request.post()
+    if not data.get("name") or not data.get("breed"):
+        return web.Response(text=_pet_form_html(dict(data), "Имя и порода обязательны"), content_type="text/html")
+
+    pet_id = str(int(time.time() * 1000))
+    conn = get_db()
+    try:
+        conn.execute(
+            """INSERT INTO pets (id,name,breed,mode,age_months,gender,price,color,description,
+            image,available,telegram_url,phone,email,is_promoted,has_kennel_landing,kennel_name,kennel_id)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                pet_id,
+                data.get("name", "").strip(),
+                data.get("breed", "").strip(),
+                data.get("mode", "cats"),
+                int(data.get("age_months") or 0),
+                data.get("gender", "male"),
+                int(data.get("price") or 0),
+                data.get("color", "").strip(),
+                data.get("description", "").strip(),
+                data.get("image", "").strip(),
+                1 if data.get("available") else 0,
+                data.get("telegram_url", "").strip(),
+                data.get("phone", "").strip(),
+                data.get("email", "").strip(),
+                1 if data.get("is_promoted") else 0,
+                1 if data.get("has_kennel_landing") else 0,
+                data.get("kennel_name", "").strip(),
+                data.get("kennel_id", "").strip(),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    raise web.HTTPFound("/admin/pets")
+
+
+async def handle_admin_pet_edit_get(request: web.Request) -> web.Response:
+    if not _admin_check(request):
+        raise web.HTTPFound("/admin/login")
+    pet_id = request.match_info["id"]
+    conn = get_db()
+    try:
+        row = conn.execute("SELECT * FROM pets WHERE id=?", (pet_id,)).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        raise web.HTTPFound("/admin/pets")
+    return web.Response(text=_pet_form_html(row_to_dict(row)), content_type="text/html")
+
+
+async def handle_admin_pet_edit_post(request: web.Request) -> web.Response:
+    if not _admin_check(request):
+        raise web.HTTPFound("/admin/login")
+    pet_id = request.match_info["id"]
+    data = await request.post()
+    if not data.get("name") or not data.get("breed"):
+        conn = get_db()
+        try:
+            row = conn.execute("SELECT * FROM pets WHERE id=?", (pet_id,)).fetchone()
+        finally:
+            conn.close()
+        pet = row_to_dict(row) if row else {}
+        pet.update(dict(data))
+        return web.Response(text=_pet_form_html(pet, "Имя и порода обязательны"), content_type="text/html")
+
+    conn = get_db()
+    try:
+        conn.execute(
+            """UPDATE pets SET name=?,breed=?,mode=?,age_months=?,gender=?,price=?,color=?,
+            description=?,image=?,available=?,telegram_url=?,phone=?,email=?,
+            is_promoted=?,has_kennel_landing=?,kennel_name=?,kennel_id=? WHERE id=?""",
+            (
+                data.get("name", "").strip(),
+                data.get("breed", "").strip(),
+                data.get("mode", "cats"),
+                int(data.get("age_months") or 0),
+                data.get("gender", "male"),
+                int(data.get("price") or 0),
+                data.get("color", "").strip(),
+                data.get("description", "").strip(),
+                data.get("image", "").strip(),
+                1 if data.get("available") else 0,
+                data.get("telegram_url", "").strip(),
+                data.get("phone", "").strip(),
+                data.get("email", "").strip(),
+                1 if data.get("is_promoted") else 0,
+                1 if data.get("has_kennel_landing") else 0,
+                data.get("kennel_name", "").strip(),
+                data.get("kennel_id", "").strip(),
+                pet_id,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    raise web.HTTPFound("/admin/pets")
+
+
+async def handle_admin_pet_delete(request: web.Request) -> web.Response:
+    if not _admin_check(request):
+        raise web.HTTPFound("/admin/login")
+    pet_id = request.match_info["id"]
+    conn = get_db()
+    try:
+        conn.execute("DELETE FROM pets WHERE id=?", (pet_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    raise web.HTTPFound("/admin/pets")
+
+
+async def handle_admin_pet_toggle(request: web.Request) -> web.Response:
+    if not _admin_check(request):
+        raise web.HTTPFound("/admin/login")
+    pet_id = request.match_info["id"]
+    conn = get_db()
+    try:
+        conn.execute("UPDATE pets SET available = 1 - available WHERE id=?", (pet_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    raise web.HTTPFound(request.headers.get("Referer", "/admin/pets"))
+
+
+# ---------------------------------------------------------------------------
 # Build aiohttp app
 # ---------------------------------------------------------------------------
 
@@ -693,6 +1166,19 @@ def build_web_app() -> web.Application:
         app.router.add_route("OPTIONS", path, handle_options)
     app.router.add_route("OPTIONS", "/pets/{id}", handle_options)
     app.router.add_route("OPTIONS", "/tg/favorites/{pet_id}", handle_options)
+
+    # Admin panel routes
+    app.router.add_get("/admin", handle_admin_redirect)
+    app.router.add_get("/admin/login", handle_admin_login_get)
+    app.router.add_post("/admin/login", handle_admin_login_post)
+    app.router.add_get("/admin/logout", handle_admin_logout)
+    app.router.add_get("/admin/pets", handle_admin_pets)
+    app.router.add_get("/admin/pets/new", handle_admin_pet_new_get)
+    app.router.add_post("/admin/pets/new", handle_admin_pet_new_post)
+    app.router.add_get("/admin/pets/{id}/edit", handle_admin_pet_edit_get)
+    app.router.add_post("/admin/pets/{id}/edit", handle_admin_pet_edit_post)
+    app.router.add_post("/admin/pets/{id}/delete", handle_admin_pet_delete)
+    app.router.add_post("/admin/pets/{id}/toggle", handle_admin_pet_toggle)
 
     return app
 
