@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Подать объявление — Breed Show</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #f2f4f8;
+      --card: #fff;
+      --text: #1a1d23;
+      --muted: #6b7280;
+      --accent: #1a5fa8;
+      --accent-light: #e8f0fb;
+      --border: #e2e6ef;
+      --danger: #e53e3e;
+      --success: #1c8a4e;
+      --radius: 12px;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 0 0 40px;
+    }
+    .header {
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 16px 12px;
+    }
+    .header h1 {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .header p {
+      font-size: .8rem;
+      color: var(--muted);
+      margin-top: 3px;
+    }
+    .form-body {
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .card {
+      background: var(--card);
+      border-radius: var(--radius);
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .card-title {
+      font-size: .75rem;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .05em;
+    }
+    .field { display: flex; flex-direction: column; gap: 5px; }
+    .field label { font-size: .8rem; font-weight: 600; color: var(--text); }
+    .field label span { color: var(--danger); margin-left: 2px; }
+    .field input, .field textarea, .field select {
+      border: 1.5px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: .9rem;
+      color: var(--text);
+      background: #fff;
+      outline: none;
+      transition: border-color .15s;
+      width: 100%;
+    }
+    .field input:focus, .field textarea:focus, .field select:focus {
+      border-color: var(--accent);
+    }
+    .field textarea { resize: none; height: 90px; }
+    .field-hint { font-size: .75rem; color: var(--muted); }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .gender-group { display: flex; gap: 8px; }
+    .gender-btn {
+      flex: 1;
+      border: 1.5px solid var(--border);
+      border-radius: 8px;
+      padding: 9px;
+      font-size: .85rem;
+      font-weight: 600;
+      background: #fff;
+      color: var(--muted);
+      cursor: pointer;
+      text-align: center;
+      transition: all .15s;
+    }
+    .gender-btn.active {
+      border-color: var(--accent);
+      background: var(--accent-light);
+      color: var(--accent);
+    }
+    .photo-row { display: flex; gap: 8px; align-items: flex-start; }
+    .photo-row input { flex: 1; }
+    .upload-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 10px 12px;
+      background: var(--accent-light);
+      border: 1.5px solid var(--accent);
+      border-radius: 8px;
+      font-size: .8rem;
+      font-weight: 600;
+      color: var(--accent);
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background .15s;
+    }
+    .upload-btn:hover { background: #d0e3fa; }
+    .upload-btn input { display: none; }
+    .upload-status { font-size: .75rem; color: var(--muted); margin-top: 4px; }
+    .photo-preview {
+      width: 100%;
+      max-height: 180px;
+      object-fit: cover;
+      border-radius: 8px;
+      margin-top: 8px;
+      display: none;
+    }
+    .submit-btn {
+      width: 100%;
+      padding: 14px;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: var(--radius);
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    .submit-btn:hover { background: #154d8c; }
+    .submit-btn:disabled { background: #a0b4d0; cursor: not-allowed; }
+    .success-screen {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 60vh;
+      padding: 32px 24px;
+      text-align: center;
+      gap: 16px;
+    }
+    .success-icon { font-size: 3.5rem; }
+    .success-screen h2 { font-size: 1.2rem; font-weight: 700; }
+    .success-screen p { font-size: .9rem; color: var(--muted); line-height: 1.5; }
+    .error-msg {
+      color: var(--danger);
+      font-size: .8rem;
+      padding: 10px 12px;
+      background: #fff5f5;
+      border-radius: 8px;
+      border: 1px solid #fecaca;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+
+<div id="mainForm">
+  <div class="header">
+    <h1>🐾 Подать объявление</h1>
+    <p>Заполните форму — мы проверим и опубликуем</p>
+  </div>
+
+  <div class="form-body">
+
+    <div class="card">
+      <div class="card-title">О питомце</div>
+
+      <div class="field">
+        <label>Тип животного <span>*</span></label>
+        <select id="fMode">
+          <option value="cats">🐱 Кошки</option>
+          <option value="dogs">🐶 Собаки</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label>Порода <span>*</span></label>
+        <input id="fBreed" type="text" placeholder="Например: Британская короткошёрстная">
+      </div>
+
+      <div class="field">
+        <label>Имя питомца</label>
+        <input id="fName" type="text" placeholder="Например: Барсик">
+      </div>
+
+      <div class="row">
+        <div class="field">
+          <label>Возраст</label>
+          <input id="fAge" type="number" min="0" max="240" placeholder="Месяцев">
+        </div>
+        <div class="field">
+          <label>Цвет</label>
+          <input id="fColor" type="text" placeholder="Например: голубой">
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Пол</label>
+        <div class="gender-group">
+          <div class="gender-btn active" id="gMale" onclick="setGender('male')">♂ Мальчик</div>
+          <div class="gender-btn" id="gFemale" onclick="setGender('female')">♀ Девочка</div>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Цена, ₽</label>
+        <input id="fPrice" type="number" min="0" placeholder="Например: 35000">
+      </div>
+
+      <div class="field">
+        <label>Описание <span>*</span></label>
+        <textarea id="fDesc" placeholder="Расскажите о питомце: документы, прививки, характер..."></textarea>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Фото</div>
+      <div class="field">
+        <label>Фото питомца</label>
+        <div class="photo-row">
+          <input id="fPhoto" type="url" placeholder="https://... или загрузите файл">
+          <label class="upload-btn">
+            📷 Загрузить
+            <input type="file" accept="image/*" id="photoFile" onchange="uploadPhoto(this)">
+          </label>
+        </div>
+        <div class="upload-status" id="uploadStatus"></div>
+        <img id="photoPreview" class="photo-preview" alt="Превью">
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Контакты</div>
+      <div class="field">
+        <label>Telegram <span>*</span></label>
+        <input id="fTelegram" type="text" placeholder="@username или https://t.me/...">
+      </div>
+      <div class="field">
+        <label>Телефон</label>
+        <input id="fPhone" type="tel" placeholder="+7 900 000-00-00">
+      </div>
+      <div class="field">
+        <label>Питомник (если есть)</label>
+        <input id="fKennel" type="text" placeholder="Название питомника">
+      </div>
+    </div>
+
+    <div class="error-msg" id="errorMsg"></div>
+
+    <button class="submit-btn" id="submitBtn" onclick="submitForm()">Отправить заявку</button>
+
+  </div>
+</div>
+
+<div class="success-screen" id="successScreen">
+  <div class="success-icon">✅</div>
+  <h2>Заявка отправлена!</h2>
+  <p>Мы проверим информацию и опубликуем объявление в течение нескольких часов. Спасибо!</p>
+</div>
+
+<script>
+'use strict';
+
+const API_URL = 'https://breed-show-production.up.railway.app';
+const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+
+if (tg) {
+  tg.ready();
+  tg.expand();
+}
+
+// Pre-fill mode from URL param
+(function() {
+  const p = new URLSearchParams(window.location.search);
+  const mode = p.get('mode') || p.get('utm_campaign') || 'cats';
+  const sel = document.getElementById('fMode');
+  if (sel) sel.value = (mode === 'dogs') ? 'dogs' : 'cats';
+})();
+
+let gender = 'male';
+
+function setGender(g) {
+  gender = g;
+  document.getElementById('gMale').classList.toggle('active', g === 'male');
+  document.getElementById('gFemale').classList.toggle('active', g === 'female');
+}
+
+document.getElementById('fPhoto').addEventListener('input', function() {
+  updatePreview(this.value);
+});
+
+function updatePreview(url) {
+  const img = document.getElementById('photoPreview');
+  if (url) {
+    img.src = url;
+    img.style.display = 'block';
+  } else {
+    img.style.display = 'none';
+  }
+}
+
+async function uploadPhoto(input) {
+  if (!input.files || !input.files[0]) return;
+  const file = input.files[0];
+  const status = document.getElementById('uploadStatus');
+  status.textContent = '⏳ Загружаю...';
+  status.style.color = '#5a6375';
+  try {
+    const form = new FormData();
+    form.append('file', file);
+    const headers = {};
+    if (tg && tg.initData) headers['X-TG-InitData'] = tg.initData;
+    const resp = await fetch(API_URL + '/api/upload-public', { method: 'POST', body: form, headers });
+    const data = await resp.json();
+    if (data && data.url) {
+      document.getElementById('fPhoto').value = data.url;
+      updatePreview(data.url);
+      status.textContent = '✅ Загружено';
+      status.style.color = '#1c8a4e';
+    } else {
+      status.textContent = '❌ ' + (data.error || 'Ошибка загрузки');
+      status.style.color = '#e53e3e';
+    }
+  } catch(e) {
+    status.textContent = '❌ Ошибка: ' + e.message;
+    status.style.color = '#e53e3e';
+  }
+}
+
+function showError(msg) {
+  const el = document.getElementById('errorMsg');
+  el.textContent = msg;
+  el.style.display = 'block';
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function hideError() {
+  document.getElementById('errorMsg').style.display = 'none';
+}
+
+async function submitForm() {
+  hideError();
+  const breed = document.getElementById('fBreed').value.trim();
+  const desc = document.getElementById('fDesc').value.trim();
+  const telegram = document.getElementById('fTelegram').value.trim();
+  if (!breed) { showError('Пожалуйста, укажите породу'); return; }
+  if (!desc) { showError('Пожалуйста, добавьте описание'); return; }
+  if (!telegram) { showError('Пожалуйста, укажите Telegram для связи'); return; }
+
+  const btn = document.getElementById('submitBtn');
+  btn.disabled = true;
+  btn.textContent = 'Отправляю...';
+
+  const payload = {
+    mode: document.getElementById('fMode').value,
+    breed,
+    name: document.getElementById('fName').value.trim(),
+    age_months: parseInt(document.getElementById('fAge').value) || 0,
+    color: document.getElementById('fColor').value.trim(),
+    gender,
+    price: parseInt(document.getElementById('fPrice').value) || 0,
+    description: desc,
+    photo_url: document.getElementById('fPhoto').value.trim(),
+    contact_telegram: telegram,
+    contact_phone: document.getElementById('fPhone').value.trim(),
+    kennel_name: document.getElementById('fKennel').value.trim(),
+  };
+
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (tg && tg.initData) headers['X-TG-InitData'] = tg.initData;
+    const resp = await fetch(API_URL + '/api/submit-listing', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json();
+    if (data && data.ok) {
+      document.getElementById('mainForm').style.display = 'none';
+      const ss = document.getElementById('successScreen');
+      ss.style.display = 'flex';
+      if (tg) tg.HapticFeedback && tg.HapticFeedback.notificationOccurred('success');
+    } else {
+      showError(data.error || 'Ошибка отправки. Попробуйте ещё раз.');
+      btn.disabled = false;
+      btn.textContent = 'Отправить заявку';
+    }
+  } catch(e) {
+    showError('Ошибка сети: ' + e.message);
+    btn.disabled = false;
+    btn.textContent = 'Отправить заявку';
+  }
+}
+</script>
+</body>
+</html>

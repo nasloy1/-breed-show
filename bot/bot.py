@@ -26,6 +26,7 @@ from telegram import (
 )
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -59,6 +60,7 @@ BOT_USERNAME_CATS = os.getenv("BOT_USERNAME_CATS", "kittens_buy_bot")
 BOT_USERNAME_DOGS = os.getenv("BOT_USERNAME_DOGS", "puppies_buy_bot")
 
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "")
 ADMIN_SESSIONS: dict[str, float] = {}  # token -> expires_at
 SESSION_DURATION = 86400  # 24 hours
 
@@ -305,6 +307,26 @@ def init_db() -> None:
             pet_id TEXT NOT NULL,
             sent_at TEXT NOT NULL DEFAULT (datetime('now')),
             UNIQUE(tg_user_id, pet_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS submissions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tg_user_id TEXT DEFAULT '',
+            tg_username TEXT DEFAULT '',
+            mode TEXT NOT NULL DEFAULT 'cats',
+            breed TEXT NOT NULL DEFAULT '',
+            name TEXT NOT NULL DEFAULT '',
+            age_months INTEGER DEFAULT 0,
+            gender TEXT DEFAULT 'male',
+            price INTEGER DEFAULT 0,
+            color TEXT DEFAULT '',
+            description TEXT NOT NULL DEFAULT '',
+            photo_url TEXT DEFAULT '',
+            contact_telegram TEXT DEFAULT '',
+            contact_phone TEXT DEFAULT '',
+            kennel_name TEXT DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
     """)
     conn.commit()
@@ -737,10 +759,83 @@ def make_unknown_handler(bot_mode: str):
 # Build Telegram Application
 # ---------------------------------------------------------------------------
 
+async def handle_submission_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    data = query.data or ""
+    if not (data.startswith("approve_sub:") or data.startswith("reject_sub:")):
+        return
+
+    action, sub_id_str = data.split(":", 1)
+    sub_id = int(sub_id_str)
+    conn = get_db()
+    row = conn.execute("SELECT * FROM submissions WHERE id=?", (sub_id,)).fetchone()
+    if not row:
+        await query.edit_message_text("❌ Заявка не найдена.")
+        return
+
+    sub = dict(row)
+    if action == "approve_sub":
+        import uuid as _uuid
+        pet_id = _uuid.uuid4().hex[:12]
+        conn.execute(
+            """INSERT INTO pets (id, name, breed, mode, age_months, gender, price, color,
+               description, image, available, telegram_url, phone, email,
+               is_promoted, has_kennel_landing, kennel_name, kennel_id,
+               show_to_subscribers, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,1,?,?,?,0,?,?,?,1,datetime('now'))""",
+            (
+                pet_id,
+                sub["name"] or sub["breed"],
+                sub["breed"],
+                sub["mode"],
+                sub["age_months"] or 0,
+                sub["gender"] or "male",
+                sub["price"] or 0,
+                sub["color"] or "",
+                sub["description"],
+                sub["photo_url"] or "",
+                sub["contact_telegram"] or "",
+                sub["contact_phone"] or "",
+                "",
+                1 if sub["kennel_name"] else 0,
+                sub["kennel_name"] or "",
+                "",
+            ),
+        )
+        conn.execute("UPDATE submissions SET status='approved' WHERE id=?", (sub_id,))
+        conn.commit()
+        await query.edit_message_text(
+            f"✅ Заявка #{sub_id} одобрена. Питомец добавлен в каталог."
+        )
+        # Notify the submitter if we have their tg_user_id
+        if sub.get("tg_user_id"):
+            try:
+                await context.bot.send_message(
+                    chat_id=int(sub["tg_user_id"]),
+                    text=f"✅ Ваше объявление «{sub['breed']}» одобрено и опубликовано в каталоге Breed Show!",
+                )
+            except Exception:
+                pass
+    else:
+        conn.execute("UPDATE submissions SET status='rejected' WHERE id=?", (sub_id,))
+        conn.commit()
+        await query.edit_message_text(f"❌ Заявка #{sub_id} отклонена.")
+        if sub.get("tg_user_id"):
+            try:
+                await context.bot.send_message(
+                    chat_id=int(sub["tg_user_id"]),
+                    text=f"К сожалению, ваше объявление «{sub['breed']}» не прошло модерацию. Свяжитесь с поддержкой для уточнения причин.",
+                )
+            except Exception:
+                pass
+
+
 def build_application(token: str, bot_mode: str) -> Application:
     app = Application.builder().token(token).build()
     app.add_handler(CommandHandler("start", make_start_handler(bot_mode)))
     app.add_handler(MessageHandler(filters.ALL, make_unknown_handler(bot_mode)))
+    app.add_handler(CallbackQueryHandler(handle_submission_callback, pattern=r"^(approve|reject)_sub:\d+$"))
     return app
 
 
@@ -1163,6 +1258,162 @@ async function uploadPhoto(input) {{
 
 
 # ---------------------------------------------------------------------------
+# Public listing submission API
+# ---------------------------------------------------------------------------
+
+async def handle_submit_listing(request: web.Request) -> web.Response:
+    body = await request.json()
+    breed = (body.get("breed") or "").strip()
+    description = (body.get("description") or "").strip()
+    contact_telegram = (body.get("contact_telegram") or "").strip()
+    if not breed or not description or not contact_telegram:
+        return json_response({"error": "Заполните обязательные поля"}, status=400)
+
+    # Try to get tg user from initData (optional — don't block if missing)
+    tg_user_id = ""
+    tg_username = ""
+    init_data_raw = request.headers.get("X-TG-InitData", "")
+    if init_data_raw:
+        uid = await get_tg_user_id(request)
+        if uid:
+            tg_user_id = str(uid)
+        # Try to extract username from initData
+        try:
+            import urllib.parse as _up
+            parsed = _up.parse_qs(init_data_raw, keep_blank_values=True)
+            user_json = parsed.get("user", [None])[0]
+            if user_json:
+                import json as _json
+                u = _json.loads(user_json)
+                tg_username = u.get("username", "")
+        except Exception:
+            pass
+
+    conn = get_db()
+    cur = conn.execute(
+        """INSERT INTO submissions
+           (tg_user_id, tg_username, mode, breed, name, age_months, gender, price, color,
+            description, photo_url, contact_telegram, contact_phone, kennel_name)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            tg_user_id,
+            tg_username,
+            body.get("mode", "cats"),
+            breed,
+            body.get("name", ""),
+            int(body.get("age_months") or 0),
+            body.get("gender", "male"),
+            int(body.get("price") or 0),
+            body.get("color", ""),
+            description,
+            body.get("photo_url", ""),
+            contact_telegram,
+            body.get("contact_phone", ""),
+            body.get("kennel_name", ""),
+        ),
+    )
+    conn.commit()
+    sub_id = cur.lastrowid
+
+    # Send Telegram notification to admin
+    if ADMIN_CHAT_ID:
+        tg_apps_ref = getattr(handle_submit_listing, "_tg_apps", [])
+        if tg_apps_ref:
+            try:
+                from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+                mode_label = "🐱 Кошки" if body.get("mode") == "cats" else "🐶 Собаки"
+                gender_label = "♂ Мальчик" if body.get("gender") == "male" else "♀ Девочка"
+                price_str = f"{int(body.get('price') or 0):,} ₽".replace(",", " ") if body.get("price") else "не указана"
+                age_str = f"{int(body.get('age_months') or 0)} мес." if body.get("age_months") else "не указан"
+                lines = [
+                    f"🐾 <b>Новая заявка #{sub_id}</b>",
+                    f"",
+                    f"Тип: {mode_label}",
+                    f"Порода: <b>{breed}</b>",
+                ]
+                if body.get("name"): lines.append(f"Имя: {body['name']}")
+                lines += [
+                    f"Возраст: {age_str}",
+                    f"Пол: {gender_label}",
+                    f"Цена: {price_str}",
+                    f"",
+                    f"📝 {description}",
+                    f"",
+                    f"📬 Контакт: {contact_telegram}",
+                ]
+                if body.get("contact_phone"): lines.append(f"📱 {body['contact_phone']}")
+                if body.get("kennel_name"): lines.append(f"🏠 Питомник: {body['kennel_name']}")
+                if tg_user_id: lines.append(f"👤 TG ID: {tg_user_id}")
+                text = "\n".join(lines)
+                keyboard = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✅ Одобрить", callback_data=f"approve_sub:{sub_id}"),
+                    InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_sub:{sub_id}"),
+                ]])
+                bot = tg_apps_ref[0].bot
+                photo_url = body.get("photo_url", "")
+                if photo_url:
+                    await bot.send_photo(
+                        chat_id=int(ADMIN_CHAT_ID),
+                        photo=photo_url,
+                        caption=text,
+                        parse_mode="HTML",
+                        reply_markup=keyboard,
+                    )
+                else:
+                    await bot.send_message(
+                        chat_id=int(ADMIN_CHAT_ID),
+                        text=text,
+                        parse_mode="HTML",
+                        reply_markup=keyboard,
+                    )
+            except Exception as e:
+                logger.warning("Failed to notify admin about submission: %s", e)
+
+    return json_response({"ok": True, "id": sub_id})
+
+
+async def handle_public_upload(request: web.Request) -> web.Response:
+    """S3 upload for public form — authenticated via initData (optional in dev mode)."""
+    try:
+        reader = await request.multipart()
+        field = await reader.next()
+        if not field or field.name != "file":
+            return json_response({"error": "no file"}, status=400)
+        data = await field.read()
+        filename = field.filename or "photo.jpg"
+        content_type_header = field.headers.get("Content-Type", "image/jpeg")
+    except Exception as e:
+        return json_response({"error": str(e)}, status=400)
+
+    try:
+        import uuid, asyncio, boto3
+        s3_endpoint = os.environ.get("S3_URL", "https://s3.twcstorage.ru")
+        s3_bucket = os.environ.get("S3_BUCKET", "")
+        s3_access = os.environ.get("S3_ACCESS_KEY", "")
+        s3_secret = os.environ.get("S3_SECRET_KEY", "")
+        s3_region = os.environ.get("S3_REGION", "ru-1")
+        ext = filename.rsplit(".", 1)[-1] if "." in filename else "jpg"
+        key = f"submissions/{uuid.uuid4().hex}.{ext}"
+
+        def _upload():
+            client = boto3.client(
+                "s3",
+                endpoint_url=s3_endpoint,
+                aws_access_key_id=s3_access,
+                aws_secret_access_key=s3_secret,
+                region_name=s3_region,
+            )
+            client.put_object(Bucket=s3_bucket, Key=key, Body=data, ContentType=content_type_header)
+            return f"{s3_endpoint}/{s3_bucket}/{key}"
+
+        loop = asyncio.get_event_loop()
+        url = await loop.run_in_executor(None, _upload)
+        return json_response({"url": url})
+    except Exception as e:
+        return json_response({"error": str(e)}, status=502)
+
+
+# ---------------------------------------------------------------------------
 # Admin HTTP handlers
 # ---------------------------------------------------------------------------
 
@@ -1571,11 +1822,14 @@ def build_web_app() -> web.Application:
     app.router.add_post("/tg/subscriptions", handle_create_subscription)
     app.router.add_delete("/tg/subscriptions/{id}", handle_delete_subscription)
     app.router.add_get("/demand/breeds", handle_demand_breeds)
+    app.router.add_post("/api/submit-listing", handle_submit_listing)
+    app.router.add_post("/api/upload-public", handle_public_upload)
 
     # CORS preflight OPTIONS routes
     for path in (
         "/health", "/analytics/event", "/tg/config", "/pets",
         "/tg/favorites", "/tg/subscriptions", "/demand/breeds",
+        "/api/submit-listing", "/api/upload-public",
     ):
         app.router.add_route("OPTIONS", path, handle_options)
     app.router.add_route("OPTIONS", "/pets/{id}", handle_options)
@@ -1644,8 +1898,9 @@ async def main() -> None:
         )
         logger.info("Telegram bots started (%d bot(s))", len(tg_apps))
 
-    # Share tg_apps with admin handler for triggering notifications
+    # Share tg_apps with handlers for triggering notifications
     handle_admin_pet_new_post._tg_apps = tg_apps
+    handle_submit_listing._tg_apps = tg_apps
 
     # Block forever
     try:
