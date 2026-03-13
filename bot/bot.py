@@ -837,7 +837,7 @@ def build_application(token: str, bot_mode: str) -> Application:
     app = Application.builder().token(token).build()
     app.add_handler(CommandHandler("start", make_start_handler(bot_mode)))
     app.add_handler(MessageHandler(filters.ALL, make_unknown_handler(bot_mode)))
-    app.add_handler(CallbackQueryHandler(handle_submission_callback, pattern=r"^(approve|reject)_sub:\d+$"))
+    app.add_handler(CallbackQueryHandler(handle_submission_callback))
     return app
 
 
@@ -1896,7 +1896,7 @@ async def main() -> None:
         await asyncio.gather(*[app.initialize() for app in tg_apps])
         await asyncio.gather(*[app.start() for app in tg_apps])
         await asyncio.gather(
-            *[app.updater.start_polling(drop_pending_updates=True) for app in tg_apps]
+            *[app.updater.start_polling(drop_pending_updates=True, allowed_updates=["message","callback_query","inline_query"]) for app in tg_apps]
         )
         logger.info("Telegram bots started (%d bot(s))", len(tg_apps))
 
