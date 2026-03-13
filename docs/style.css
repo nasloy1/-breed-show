@@ -172,6 +172,7 @@ button { cursor: pointer; border: none; background: none; font: inherit; }
   z-index: 100;
   box-shadow: var(--shadow-panel);
 }
+.tab-bar[hidden] { display: none !important; }
 
 .tab-item {
   flex: 1;
