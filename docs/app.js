@@ -1065,6 +1065,43 @@ function renderFilters() {
   if (ageMin) ageMin.oninput = () => { state.tempFilters.ageMin = parseInt(ageMin.value, 10) || 0; };
   if (ageMax) ageMax.oninput = () => { state.tempFilters.ageMax = parseInt(ageMax.value, 10) || 0; };
   if (availToggle) availToggle.onchange = () => { state.tempFilters.availableOnly = availToggle.checked; };
+
+  // Subscribe button on filters page
+  if (getTgUserId()) {
+    renderFilterSubscribeButton();
+    if (breedInput) breedInput.addEventListener('input', renderFilterSubscribeButton);
+  }
+}
+
+function renderFilterSubscribeButton() {
+  const bar = document.getElementById('filterSubscribeBar');
+  if (!bar) return;
+  const breed = (state.tempFilters?.breed || '').trim();
+  const mode = state.mode;
+  const existing = breed
+    ? getSubscriptionForBreed(breed, mode)
+    : getSubscriptionForMode(mode);
+
+  bar.hidden = false;
+  if (existing) {
+    bar.innerHTML = `<button class="subscribe-btn subscribe-btn--active subscribe-btn--bar" id="filterSubBtn">🔔 Вы следите за этим фильтром</button>`;
+    document.getElementById('filterSubBtn').addEventListener('click', async () => {
+      await deleteSubscription(existing.id);
+      renderFilterSubscribeButton();
+      showToast('Подписка отменена', 'info');
+    });
+  } else {
+    const label = breed
+      ? `🔔 Следить за новыми «${breed}»`
+      : `🔔 Следить за новыми объявлениями`;
+    bar.innerHTML = `<button class="subscribe-btn subscribe-btn--bar" id="filterSubBtn">${escHtml(label)}</button>`;
+    document.getElementById('filterSubBtn').addEventListener('click', async () => {
+      await createSubscription(mode, breed || null, '');
+      renderFilterSubscribeButton();
+      showToast('Подписка создана 🔔', 'success');
+      try { tg.HapticFeedback.notificationOccurred('success'); } catch (_) {}
+    });
+  }
 }
 
 function applyFilters() {

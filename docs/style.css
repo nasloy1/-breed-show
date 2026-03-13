@@ -849,6 +849,9 @@ button { cursor: pointer; border: none; background: none; font: inherit; }
 /* ---- Catalog subscribe bar ---- */
 .catalog-subscribe-bar { padding: 0 0 4px; }
 
+/* ---- Filter subscribe bar ---- */
+#filterSubscribeBar { padding: 0 0 80px; }
+
 /* ---- Subscriptions list in Saved ---- */
 .sub-section { margin-bottom: 16px; }
 .sub-section__title {
