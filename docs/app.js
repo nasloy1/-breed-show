@@ -367,7 +367,24 @@ function sharePet(pet) {
 //  Navigation
 // ============================================================
 
+function ensurePage(pageId) {
+  if (!document.getElementById(pageId)) {
+    const section = document.createElement('section');
+    section.className = 'page page--hidden';
+    section.id = pageId;
+    section.setAttribute('data-page', pageId.replace('page', '').toLowerCase());
+    if (pageId === 'pageAdd') {
+      section.innerHTML = '<div class="add-form-body" id="addFormBody"></div>';
+    }
+    const container = document.getElementById('pageContainer');
+    if (container) container.appendChild(section);
+  }
+}
+
 function navigate(page, data = {}) {
+  // Ensure dynamic pages exist before hiding others
+  if (page === 'add') ensurePage('pageAdd');
+
   const prevPage = state.page;
   state.prevPage = prevPage;
   state.page = page;
