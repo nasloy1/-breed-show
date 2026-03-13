@@ -1180,10 +1180,10 @@ async def handle_admin_upload(request: web.Request) -> web.Response:
     except Exception as e:
         return web.Response(text=json.dumps({"error": str(e)}), status=400, content_type="application/json")
 
-    import uuid
-    import asyncio
-    import boto3
     try:
+        import uuid
+        import asyncio
+        import boto3
         s3_endpoint = os.environ.get("S3_URL", "https://s3.twcstorage.ru")
         s3_bucket = os.environ.get("S3_BUCKET", "")
         s3_access = os.environ.get("S3_ACCESS_KEY", "")
