@@ -1205,7 +1205,6 @@ async def handle_admin_upload(request: web.Request) -> web.Response:
                 Key=key,
                 Body=data,
                 ContentType=content_type_header,
-                ACL="public-read",
             )
             return f"{s3_endpoint}/{s3_bucket}/{key}"
 
