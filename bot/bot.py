@@ -1180,28 +1180,38 @@ async def handle_admin_upload(request: web.Request) -> web.Response:
     except Exception as e:
         return web.Response(text=json.dumps({"error": str(e)}), status=400, content_type="application/json")
 
-    import io
-    from aiohttp import ClientSession, FormData as AioFormData
+    import uuid
+    import asyncio
+    import boto3
     try:
-        form = AioFormData()
-        form.add_field(
-            "file",
-            io.BytesIO(data),
-            filename=filename,
-            content_type=content_type_header,
-        )
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        async with ClientSession(headers=headers) as session:
-            async with session.post("https://telegra.ph/upload", data=form) as resp:
-                body = await resp.text()
-                try:
-                    result = json.loads(body)
-                except Exception:
-                    result = body
-        if isinstance(result, list) and result and isinstance(result[0], dict) and result[0].get("src"):
-            url = "https://telegra.ph" + result[0]["src"]
-            return web.Response(text=json.dumps({"url": url}), content_type="application/json")
-        return web.Response(text=json.dumps({"error": f"telegra.ph: {result}"}), status=502, content_type="application/json")
+        s3_endpoint = os.environ.get("S3_URL", "https://s3.twcstorage.ru")
+        s3_bucket = os.environ.get("S3_BUCKET", "")
+        s3_access = os.environ.get("S3_ACCESS_KEY", "")
+        s3_secret = os.environ.get("S3_SECRET_KEY", "")
+        s3_region = os.environ.get("S3_REGION", "ru-1")
+        ext = filename.rsplit(".", 1)[-1] if "." in filename else "jpg"
+        key = f"pets/{uuid.uuid4().hex}.{ext}"
+
+        def _upload():
+            client = boto3.client(
+                "s3",
+                endpoint_url=s3_endpoint,
+                aws_access_key_id=s3_access,
+                aws_secret_access_key=s3_secret,
+                region_name=s3_region,
+            )
+            client.put_object(
+                Bucket=s3_bucket,
+                Key=key,
+                Body=data,
+                ContentType=content_type_header,
+                ACL="public-read",
+            )
+            return f"{s3_endpoint}/{s3_bucket}/{key}"
+
+        loop = asyncio.get_event_loop()
+        url = await loop.run_in_executor(None, _upload)
+        return web.Response(text=json.dumps({"url": url}), content_type="application/json")
     except Exception as e:
         return web.Response(text=json.dumps({"error": str(e)}), status=502, content_type="application/json")
 
