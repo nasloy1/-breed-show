@@ -394,6 +394,8 @@ function navigate(page, data = {}) {
     renderFilters();
   } else if (page === 'howto') {
     renderHowto();
+  } else if (page === 'add') {
+    renderAdd();
   }
 
   // Scroll to top on page change
@@ -422,11 +424,12 @@ function updateHeader(page) {
     detail: '',
     saved: 'Сохранённые',
     howto: 'Как пользоваться',
+    add: 'Подать объявление',
   };
 
   if (titleEl) titleEl.textContent = titles[page] || 'Breed Show';
 
-  const showBack = page === 'detail' || page === 'filters';
+  const showBack = page === 'detail' || page === 'filters' || page === 'add';
   if (backBtn) backBtn.hidden = !showBack;
 
   const showFilter = page === 'catalog';
@@ -445,9 +448,9 @@ function updateTabBar(page) {
   document.querySelectorAll('.tab-item').forEach((btn) => {
     btn.classList.toggle('tab-item--active', btn.dataset.tab === page);
   });
-  // Hide tab bar on filters page
+  // Hide tab bar on filters and add pages
   const tabBar = document.getElementById('tabBar');
-  if (tabBar) tabBar.hidden = page === 'filters';
+  if (tabBar) tabBar.hidden = page === 'filters' || page === 'add';
 }
 
 // ============================================================
@@ -1130,16 +1133,182 @@ function resetFilters() {
 //  Render: Howto
 // ============================================================
 
+// ============================================================
+//  Render: Add listing form
+// ============================================================
+
+function renderAdd() {
+  const container = document.getElementById('addFormBody');
+  if (!container) return;
+
+  container.innerHTML = `
+    <div class="add-card">
+      <div class="add-card__title">О питомце</div>
+      <div class="add-field">
+        <label>Порода <span class="req">*</span></label>
+        <input id="afBreed" type="text" placeholder="Например: Британская короткошёрстная">
+      </div>
+      <div class="add-field">
+        <label>Имя питомца</label>
+        <input id="afName" type="text" placeholder="Например: Барсик">
+      </div>
+      <div class="add-row">
+        <div class="add-field">
+          <label>Возраст (мес.)</label>
+          <input id="afAge" type="number" min="0" max="240" placeholder="3">
+        </div>
+        <div class="add-field">
+          <label>Цвет</label>
+          <input id="afColor" type="text" placeholder="голубой">
+        </div>
+      </div>
+      <div class="add-field">
+        <label>Пол</label>
+        <div class="add-gender">
+          <div class="add-gender-btn active" id="afGMale" onclick="afSetGender('male')">♂ Мальчик</div>
+          <div class="add-gender-btn" id="afGFemale" onclick="afSetGender('female')">♀ Девочка</div>
+        </div>
+      </div>
+      <div class="add-field">
+        <label>Цена, ₽</label>
+        <input id="afPrice" type="number" min="0" placeholder="35000">
+      </div>
+      <div class="add-field">
+        <label>Описание <span class="req">*</span></label>
+        <textarea id="afDesc" placeholder="Расскажите о питомце: документы, прививки, характер…"></textarea>
+      </div>
+    </div>
+
+    <div class="add-card">
+      <div class="add-card__title">Фото</div>
+      <div class="add-field">
+        <div class="add-photo-row">
+          <input id="afPhoto" type="url" placeholder="https://… или загрузите файл">
+          <label class="add-upload-btn">📷 <input type="file" accept="image/*" onchange="afUploadPhoto(this)"></label>
+        </div>
+        <div class="add-upload-status" id="afUploadStatus"></div>
+        <img id="afPhotoPreview" class="add-photo-preview" alt="">
+      </div>
+    </div>
+
+    <div class="add-card">
+      <div class="add-card__title">Контакты</div>
+      <div class="add-field">
+        <label>Telegram <span class="req">*</span></label>
+        <input id="afTelegram" type="text" placeholder="@username или https://t.me/…">
+      </div>
+      <div class="add-field">
+        <label>Телефон</label>
+        <input id="afPhone" type="tel" placeholder="+7 900 000-00-00">
+      </div>
+      <div class="add-field">
+        <label>Питомник (если есть)</label>
+        <input id="afKennel" type="text" placeholder="Название питомника">
+      </div>
+    </div>
+
+    <div class="add-error" id="afError"></div>
+    <button class="add-submit-btn" id="afSubmitBtn" onclick="afSubmit()">Отправить заявку</button>
+  `;
+
+  document.getElementById('afPhoto').addEventListener('input', function () {
+    const img = document.getElementById('afPhotoPreview');
+    img.src = this.value;
+    img.style.display = this.value ? 'block' : 'none';
+  });
+
+  window._afGender = 'male';
+}
+
+window.afSetGender = function(g) {
+  window._afGender = g;
+  document.getElementById('afGMale').classList.toggle('active', g === 'male');
+  document.getElementById('afGFemale').classList.toggle('active', g === 'female');
+};
+
+window.afUploadPhoto = async function(input) {
+  if (!input.files || !input.files[0]) return;
+  const status = document.getElementById('afUploadStatus');
+  status.textContent = '⏳ Загружаю…';
+  status.style.color = 'var(--text-muted)';
+  try {
+    const form = new FormData();
+    form.append('file', input.files[0]);
+    const headers = {};
+    if (tg.initData) headers['X-TG-InitData'] = tg.initData;
+    const resp = await fetch(TG_API_URL + '/api/upload-public', { method: 'POST', body: form, headers });
+    const data = await resp.json();
+    if (data && data.url) {
+      document.getElementById('afPhoto').value = data.url;
+      const img = document.getElementById('afPhotoPreview');
+      img.src = data.url; img.style.display = 'block';
+      status.textContent = '✅ Загружено'; status.style.color = 'var(--success)';
+    } else {
+      status.textContent = '❌ ' + (data.error || 'Ошибка'); status.style.color = 'var(--danger)';
+    }
+  } catch (e) {
+    status.textContent = '❌ ' + e.message; status.style.color = 'var(--danger)';
+  }
+};
+
+window.afSubmit = async function() {
+  const breed = (document.getElementById('afBreed')?.value || '').trim();
+  const desc = (document.getElementById('afDesc')?.value || '').trim();
+  const telegram = (document.getElementById('afTelegram')?.value || '').trim();
+  const errEl = document.getElementById('afError');
+
+  errEl.style.display = 'none';
+  if (!breed) { errEl.textContent = 'Пожалуйста, укажите породу'; errEl.style.display = 'block'; return; }
+  if (!desc) { errEl.textContent = 'Пожалуйста, добавьте описание'; errEl.style.display = 'block'; return; }
+  if (!telegram) { errEl.textContent = 'Пожалуйста, укажите Telegram для связи'; errEl.style.display = 'block'; return; }
+
+  const btn = document.getElementById('afSubmitBtn');
+  btn.disabled = true; btn.textContent = 'Отправляю…';
+
+  const payload = {
+    mode: state.mode,
+    breed,
+    name: (document.getElementById('afName')?.value || '').trim(),
+    age_months: parseInt(document.getElementById('afAge')?.value) || 0,
+    color: (document.getElementById('afColor')?.value || '').trim(),
+    gender: window._afGender || 'male',
+    price: parseInt(document.getElementById('afPrice')?.value) || 0,
+    description: desc,
+    photo_url: (document.getElementById('afPhoto')?.value || '').trim(),
+    contact_telegram: telegram,
+    contact_phone: (document.getElementById('afPhone')?.value || '').trim(),
+    kennel_name: (document.getElementById('afKennel')?.value || '').trim(),
+  };
+
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (tg.initData) headers['X-TG-InitData'] = tg.initData;
+    const resp = await fetch(TG_API_URL + '/api/submit-listing', { method: 'POST', headers, body: JSON.stringify(payload) });
+    const data = await resp.json();
+    if (data && data.ok) {
+      document.getElementById('addFormBody').innerHTML = `
+        <div class="add-success">
+          <div class="add-success__icon">✅</div>
+          <div class="add-success__title">Заявка отправлена!</div>
+          <div class="add-success__text">Мы проверим информацию и опубликуем объявление в течение нескольких часов. Спасибо!</div>
+        </div>`;
+      tg.HapticFeedback && tg.HapticFeedback.notificationOccurred('success');
+    } else {
+      errEl.textContent = data.error || 'Ошибка отправки. Попробуйте ещё раз.';
+      errEl.style.display = 'block';
+      btn.disabled = false; btn.textContent = 'Отправить заявку';
+    }
+  } catch (e) {
+    errEl.textContent = 'Ошибка сети: ' + e.message;
+    errEl.style.display = 'block';
+    btn.disabled = false; btn.textContent = 'Отправить заявку';
+  }
+};
+
 function renderHowto() {
   const addBtn = document.getElementById('btnAddForSale');
   if (addBtn) {
-    addBtn.onclick = () => {
-      let url = 'https://breed.show/add?utm_source=telegram&utm_medium=miniapp&utm_campaign=' + state.mode;
-      if (state.config && state.config.links && state.config.links.add_for_sale_url_template) {
-        url = state.config.links.add_for_sale_url_template.replace('{mode}', state.mode);
-      }
-      window.location.href = url;
-    };
+    addBtn.onclick = () => navigate('add');
   }
 }
 

@@ -910,3 +910,86 @@ button { cursor: pointer; border: none; background: none; font: inherit; }
   flex-direction: column;
   gap: 8px;
 }
+
+/* ---- Add listing form ---- */
+.add-form-body {
+  padding: 12px 12px calc(var(--tabbar-h) + var(--safe-bottom) + 16px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.add-card {
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.add-card__title {
+  font-size: .7rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+.add-field { display: flex; flex-direction: column; gap: 4px; }
+.add-field label { font-size: .8rem; font-weight: 600; color: var(--text); }
+.add-field label .req { color: var(--danger); margin-left: 2px; }
+.add-field input, .add-field textarea, .add-field select {
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 9px 11px;
+  font-size: .9rem;
+  color: var(--text);
+  background: var(--surface);
+  outline: none;
+  width: 100%;
+  transition: border-color .15s;
+  font-family: var(--font);
+}
+.add-field input:focus, .add-field textarea:focus, .add-field select:focus {
+  border-color: var(--btn);
+}
+.add-field textarea { resize: none; height: 88px; }
+.add-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.add-gender { display: flex; gap: 8px; }
+.add-gender-btn {
+  flex: 1; border: 1.5px solid var(--border); border-radius: var(--radius-sm);
+  padding: 8px; font-size: .85rem; font-weight: 600; background: var(--surface);
+  color: var(--text-secondary); cursor: pointer; text-align: center; transition: all .15s;
+}
+.add-gender-btn.active { border-color: var(--btn); background: var(--btn-soft); color: var(--btn); }
+.add-photo-row { display: flex; gap: 8px; align-items: flex-start; }
+.add-photo-row input { flex: 1; }
+.add-upload-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 9px 11px; background: var(--btn-soft); border: 1.5px solid var(--btn);
+  border-radius: var(--radius-sm); font-size: .8rem; font-weight: 600; color: var(--btn);
+  cursor: pointer; white-space: nowrap; transition: background .15s;
+}
+.add-upload-btn input[type=file] { display: none; }
+.add-upload-status { font-size: .72rem; color: var(--text-muted); margin-top: 3px; }
+.add-photo-preview {
+  width: 100%; max-height: 160px; object-fit: cover;
+  border-radius: var(--radius-sm); margin-top: 6px; display: none;
+}
+.add-error {
+  color: var(--danger); font-size: .8rem; padding: 10px 12px;
+  background: rgba(192,57,43,0.07); border-radius: var(--radius-sm);
+  border: 1px solid rgba(192,57,43,0.2); display: none;
+}
+.add-submit-btn {
+  width: 100%; padding: 14px; background: var(--btn); color: #fff;
+  border: none; border-radius: var(--radius); font-size: 1rem; font-weight: 700;
+  cursor: pointer; transition: background .15s;
+}
+.add-submit-btn:disabled { background: var(--text-muted); cursor: not-allowed; }
+.add-success {
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; min-height: 55vh; padding: 32px 24px;
+  text-align: center; gap: 14px;
+}
+.add-success__icon { font-size: 3.5rem; }
+.add-success__title { font-size: 1.15rem; font-weight: 700; color: var(--text); }
+.add-success__text { font-size: .88rem; color: var(--text-secondary); line-height: 1.5; }
