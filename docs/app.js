@@ -223,6 +223,19 @@ function updateSavedBadge() {
 //  API calls
 // ============================================================
 
+function trackEvent(event, data = {}) {
+  const payload = {
+    event,
+    tg_user_id: tg.initDataUnsafe?.user?.id ? String(tg.initDataUnsafe.user.id) : null,
+    ...data,
+  };
+  fetch(TG_API_URL + '/analytics/event', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).catch(() => {});
+}
+
 async function apiFetch(path, options = {}) {
   const url = TG_API_URL + path;
   const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
@@ -602,6 +615,10 @@ async function renderDetail(petId) {
 
   const isFav = state.favorites.has(String(pet.id));
 
+  if (pet.has_kennel_landing && pet.kennel_id) {
+    trackEvent('kennel_view', { pet_id: String(pet.id), kennel_id: String(pet.kennel_id) });
+  }
+
   const kennelBlock = pet.has_kennel_landing && pet.kennel_name
     ? `
       <div class="kennel-block">
@@ -717,6 +734,7 @@ async function renderDetail(petId) {
   const kennelLinkBtn = container.querySelector('.kennel-block__link');
   if (kennelLinkBtn && pet.kennel_id) {
     kennelLinkBtn.addEventListener('click', () => {
+      trackEvent('kennel_from_pet_click', { pet_id: String(pet.id), kennel_id: String(pet.kennel_id) });
       const url = `https://breed.show/kennel/${encodeURIComponent(pet.kennel_id)}`;
       tg.openLink(url);
     });

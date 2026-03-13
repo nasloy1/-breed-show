@@ -279,6 +279,16 @@ def init_db() -> None:
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             UNIQUE(tg_user_id, pet_id)
         );
+
+        CREATE TABLE IF NOT EXISTS analytics_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event TEXT NOT NULL,
+            pet_id TEXT,
+            kennel_id TEXT,
+            tg_user_id TEXT,
+            extra TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
     """)
     conn.commit()
 
@@ -437,6 +447,33 @@ async def handle_health(request: web.Request) -> web.Response:
 
 async def handle_options(request: web.Request) -> web.Response:
     return web.Response(status=204, headers=CORS_HEADERS)
+
+
+async def handle_analytics_event(request: web.Request) -> web.Response:
+    try:
+        body = await request.json()
+    except Exception:
+        return json_response({"ok": False, "error": "invalid json"}, status=400)
+
+    event = str(body.get("event", ""))[:64]
+    if not event:
+        return json_response({"ok": False, "error": "event required"}, status=400)
+
+    pet_id = str(body.get("pet_id", ""))[:64] or None
+    kennel_id = str(body.get("kennel_id", ""))[:64] or None
+    tg_user_id = str(body.get("tg_user_id", ""))[:64] or None
+    extra = json.dumps(body.get("extra")) if body.get("extra") else None
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "INSERT INTO analytics_events (event, pet_id, kennel_id, tg_user_id, extra) VALUES (?,?,?,?,?)",
+        (event, pet_id, kennel_id, tg_user_id, extra),
+    )
+    conn.commit()
+    conn.close()
+
+    logger.info("analytics: %s pet=%s kennel=%s user=%s", event, pet_id, kennel_id, tg_user_id)
+    return json_response({"ok": True})
 
 
 async def handle_config(request: web.Request) -> web.Response:
@@ -744,7 +781,11 @@ def _admin_layout(title: str, body: str) -> str:
 <body>
 <div class="topbar">
   <h1>🐾 Breed Show Admin</h1>
-  <a href="/admin/logout">Выйти</a>
+  <div style="display:flex;gap:12px;align-items:center">
+    <a href="/admin/pets">Питомцы</a>
+    <a href="/admin/analytics">Аналитика</a>
+    <a href="/admin/logout">Выйти</a>
+  </div>
 </div>
 <div class="container">{body}</div>
 </body></html>"""
@@ -1146,6 +1187,61 @@ async def handle_admin_pet_toggle(request: web.Request) -> web.Response:
     raise web.HTTPFound(request.headers.get("Referer", "/admin/pets"))
 
 
+async def handle_admin_analytics(request: web.Request) -> web.Response:
+    if not _admin_check(request):
+        raise web.HTTPFound("/admin/login")
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+
+    # Summary counts per event
+    rows = conn.execute("""
+        SELECT event, COUNT(*) as cnt,
+               COUNT(DISTINCT tg_user_id) as uniq_users
+        FROM analytics_events
+        GROUP BY event
+        ORDER BY cnt DESC
+    """).fetchall()
+
+    # Recent 50 events
+    recent = conn.execute("""
+        SELECT event, pet_id, kennel_id, tg_user_id, created_at
+        FROM analytics_events
+        ORDER BY id DESC
+        LIMIT 50
+    """).fetchall()
+    conn.close()
+
+    summary_rows = "".join(
+        f"<tr><td>{r['event']}</td><td>{r['cnt']}</td><td>{r['uniq_users']}</td></tr>"
+        for r in rows
+    ) or "<tr><td colspan='3' style='text-align:center;color:#8a94a6'>Нет данных</td></tr>"
+
+    recent_rows = "".join(
+        f"<tr><td>{r['event']}</td><td>{r['pet_id'] or '—'}</td>"
+        f"<td>{r['kennel_id'] or '—'}</td><td>{r['tg_user_id'] or '—'}</td>"
+        f"<td style='white-space:nowrap'>{r['created_at']}</td></tr>"
+        for r in recent
+    ) or "<tr><td colspan='5' style='text-align:center;color:#8a94a6'>Нет данных</td></tr>"
+
+    body = f"""
+    <h2 style="margin-bottom:20px">📊 Аналитика событий</h2>
+
+    <h3 style="margin-bottom:12px">Сводка</h3>
+    <table>
+      <thead><tr><th>Событие</th><th>Всего</th><th>Уник. пользователей</th></tr></thead>
+      <tbody>{summary_rows}</tbody>
+    </table>
+
+    <h3 style="margin:24px 0 12px">Последние 50 событий</h3>
+    <table>
+      <thead><tr><th>Событие</th><th>Pet ID</th><th>Kennel ID</th><th>User ID</th><th>Время</th></tr></thead>
+      <tbody>{recent_rows}</tbody>
+    </table>
+    """
+    return web.Response(text=_admin_layout("Аналитика", body), content_type="text/html")
+
+
 # ---------------------------------------------------------------------------
 # Build aiohttp app
 # ---------------------------------------------------------------------------
@@ -1154,6 +1250,7 @@ def build_web_app() -> web.Application:
     app = web.Application()
 
     app.router.add_get("/health", handle_health)
+    app.router.add_post("/analytics/event", handle_analytics_event)
     app.router.add_get("/tg/config", handle_config)
     app.router.add_get("/pets", handle_pets)
     app.router.add_get("/pets/{id}", handle_pet_by_id)
@@ -1162,7 +1259,7 @@ def build_web_app() -> web.Application:
     app.router.add_delete("/tg/favorites/{pet_id}", handle_delete_favorite)
 
     # CORS preflight OPTIONS routes
-    for path in ("/health", "/tg/config", "/pets", "/tg/favorites"):
+    for path in ("/health", "/analytics/event", "/tg/config", "/pets", "/tg/favorites"):
         app.router.add_route("OPTIONS", path, handle_options)
     app.router.add_route("OPTIONS", "/pets/{id}", handle_options)
     app.router.add_route("OPTIONS", "/tg/favorites/{pet_id}", handle_options)
@@ -1179,6 +1276,7 @@ def build_web_app() -> web.Application:
     app.router.add_post("/admin/pets/{id}/edit", handle_admin_pet_edit_post)
     app.router.add_post("/admin/pets/{id}/delete", handle_admin_pet_delete)
     app.router.add_post("/admin/pets/{id}/toggle", handle_admin_pet_toggle)
+    app.router.add_get("/admin/analytics", handle_admin_analytics)
 
     return app
 
