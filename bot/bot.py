@@ -1180,14 +1180,25 @@ async def handle_admin_upload(request: web.Request) -> web.Response:
     except Exception as e:
         return web.Response(text=json.dumps({"error": str(e)}), status=400, content_type="application/json")
 
+    import io
     from aiohttp import ClientSession, FormData as AioFormData
     try:
         form = AioFormData()
-        form.add_field("file", data, filename=filename, content_type=content_type_header)
-        async with ClientSession() as session:
+        form.add_field(
+            "file",
+            io.BytesIO(data),
+            filename=filename,
+            content_type=content_type_header,
+        )
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        async with ClientSession(headers=headers) as session:
             async with session.post("https://telegra.ph/upload", data=form) as resp:
-                result = await resp.json(content_type=None)
-        if isinstance(result, list) and result and result[0].get("src"):
+                body = await resp.text()
+                try:
+                    result = json.loads(body)
+                except Exception:
+                    result = body
+        if isinstance(result, list) and result and isinstance(result[0], dict) and result[0].get("src"):
             url = "https://telegra.ph" + result[0]["src"]
             return web.Response(text=json.dumps({"url": url}), content_type="application/json")
         return web.Response(text=json.dumps({"error": f"telegra.ph: {result}"}), status=502, content_type="application/json")
