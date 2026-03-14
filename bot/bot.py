@@ -335,6 +335,7 @@ def init_db() -> None:
     for col, definition in [
         ("show_to_subscribers", "INTEGER NOT NULL DEFAULT 0"),
         ("created_at", "TEXT NOT NULL DEFAULT (datetime('now'))"),
+        ("photos", "TEXT NOT NULL DEFAULT '[]'"),
     ]:
         try:
             conn.execute(f"ALTER TABLE pets ADD COLUMN {col} {definition}")
@@ -371,6 +372,16 @@ def row_to_dict(row) -> dict:
     d["is_promoted"] = bool(d.get("is_promoted", 0))
     d["has_kennel_landing"] = bool(d.get("has_kennel_landing", 0))
     d["show_to_subscribers"] = bool(d.get("show_to_subscribers", 0))
+    # Parse photos JSON
+    try:
+        import json as _j
+        photos_raw = d.get("photos", "[]") or "[]"
+        d["photos"] = _j.loads(photos_raw) if isinstance(photos_raw, str) else photos_raw
+    except Exception:
+        d["photos"] = []
+    # Ensure image is consistent with photos[0]
+    if not d.get("image") and d["photos"]:
+        d["image"] = d["photos"][0]
     return d
 
 
@@ -1118,6 +1129,30 @@ def _pet_form_html(pet: dict | None = None, error: str = "") -> str:
 
     err_html = f'<div style="background:#fde8e8;color:#c0392b;padding:10px 14px;border-radius:8px;margin-bottom:16px">{error}</div>' if error else ""
 
+    # Build existing photos list: first photo from image, rest from photos array
+    existing_photos = list(p.get("photos") or [])
+    if not existing_photos and p.get("image"):
+        existing_photos = [p.get("image", "")]
+    elif existing_photos and p.get("image") and existing_photos[0] != p.get("image"):
+        existing_photos = [p.get("image", "")] + existing_photos
+    # Pad to at least 1 slot
+    if not existing_photos:
+        existing_photos = [""]
+    photo_rows = []
+    for i, url in enumerate(existing_photos[:10]):
+        safe_url = url.replace('"', '&quot;')
+        disp = "block" if url else "none"
+        photo_rows.append(
+            f'<div class="photo-item" data-idx="{i}" style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;margin-bottom:8px">'
+            f'<input type="url" name="photo_{i}" value="{safe_url}" id="photoUrl_{i}" oninput="previewPhotoImg({i},this.value)" placeholder="Фото {i+1} — https://..." style="flex:1;min-width:200px">'
+            f'<label class="upload-btn" title="Загрузить фото">'
+            f'📷 <input type="file" accept="image/*" onchange="uploadPhotoIdx(this,{i})">'
+            f'</label>'
+            f'<img id="photoPreview_{i}" class="img-preview" src="{safe_url}" alt="" style="width:80px;height:60px;object-fit:cover;border-radius:6px;display:{disp}">'
+            f'</div>'
+        )
+    photos_html = "".join(photo_rows)
+
     body = f"""
 <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
   <a href="/admin/pets" class="btn btn-outline btn-sm">← Назад</a>
@@ -1171,16 +1206,10 @@ def _pet_form_html(pet: dict | None = None, error: str = "") -> str:
     <textarea name="description">{v('description')}</textarea>
   </div>
   <div class="form-group">
-    <label>Фото</label>
-    <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap">
-      <input type="url" name="image" value="{v('image')}" id="imgUrl" oninput="previewImg(this.value)" placeholder="https://..." style="flex:1;min-width:200px">
-      <label class="upload-btn" title="Загрузить фото">
-        📷 Загрузить
-        <input type="file" accept="image/*" id="imgUpload" onchange="uploadPhoto(this)">
-      </label>
-    </div>
+    <label>Фото (до 10 штук)</label>
+    <div id="photoList">{photos_html}</div>
+    <button type="button" id="addPhotoBtn" onclick="addPhotoField()" style="margin-top:8px;padding:8px 14px;border:1.5px dashed #dde4ee;border-radius:8px;background:transparent;color:#1a5fa8;font-size:.85rem;font-weight:600;cursor:pointer;width:100%">+ Добавить фото</button>
     <div class="upload-status" id="uploadStatus"></div>
-    <img id="imgPreview" class="img-preview" src="{v('image')}" alt="">
   </div>
   <div class="form-row">
     <div class="form-group">
@@ -1220,16 +1249,28 @@ def _pet_form_html(pet: dict | None = None, error: str = "") -> str:
 </form>
 </div>
 <script>
-function previewImg(url) {{
-  var img = document.getElementById('imgPreview');
+var _photoCount = document.getElementById('photoList').children.length;
+function previewPhotoImg(idx, url) {{
+  var img = document.getElementById('photoPreview_' + idx);
+  if (!img) return;
   if (url) {{ img.src = url; img.style.display = 'block'; }}
   else {{ img.style.display = 'none'; }}
 }}
-window.onload = function() {{
-  var url = document.getElementById('imgUrl').value;
-  if (url) previewImg(url);
-}};
-async function uploadPhoto(input) {{
+function addPhotoField() {{
+  if (_photoCount >= 10) return;
+  var idx = _photoCount;
+  var div = document.createElement('div');
+  div.className = 'photo-item';
+  div.dataset.idx = idx;
+  div.style.cssText = 'display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;margin-bottom:8px';
+  div.innerHTML = '<input type="url" name="photo_' + idx + '" id="photoUrl_' + idx + '" oninput="previewPhotoImg(' + idx + ',this.value)" placeholder="Фото ' + (idx+1) + ' — https://..." style="flex:1;min-width:200px">'
+    + '<label class="upload-btn" title="Загрузить фото">📷 <input type="file" accept="image/*" onchange="uploadPhotoIdx(this,' + idx + ')"></label>'
+    + '<img id="photoPreview_' + idx + '" class="img-preview" alt="" style="width:80px;height:60px;object-fit:cover;border-radius:6px;display:none">';
+  document.getElementById('photoList').appendChild(div);
+  _photoCount++;
+  if (_photoCount >= 10) document.getElementById('addPhotoBtn').style.display = 'none';
+}}
+async function uploadPhotoIdx(input, idx) {{
   if (!input.files || !input.files[0]) return;
   var file = input.files[0];
   var status = document.getElementById('uploadStatus');
@@ -1241,8 +1282,8 @@ async function uploadPhoto(input) {{
     var resp = await fetch('/admin/upload', {{ method: 'POST', body: form }});
     var data = await resp.json();
     if (data && data.url) {{
-      document.getElementById('imgUrl').value = data.url;
-      previewImg(data.url);
+      document.getElementById('photoUrl_' + idx).value = data.url;
+      previewPhotoImg(idx, data.url);
       status.textContent = '✅ Загружено';
       status.style.color = '#1c8a4e';
     }} else {{
@@ -1616,13 +1657,21 @@ async def handle_admin_pet_new_post(request: web.Request) -> web.Response:
 
     pet_id = str(int(time.time() * 1000))
     show_to_subs = 1 if data.get("show_to_subscribers") else 0
+    import json as _json
+    photo_urls = []
+    for i in range(10):
+        url = data.get(f"photo_{i}", "").strip()
+        if url:
+            photo_urls.append(url)
+    image = photo_urls[0] if photo_urls else data.get("image", "").strip()
+    photos_json = _json.dumps(photo_urls, ensure_ascii=False)
     conn = get_db()
     try:
         conn.execute(
             """INSERT INTO pets (id,name,breed,mode,age_months,gender,price,color,description,
-            image,available,telegram_url,phone,email,is_promoted,has_kennel_landing,kennel_name,kennel_id,
+            image,photos,available,telegram_url,phone,email,is_promoted,has_kennel_landing,kennel_name,kennel_id,
             show_to_subscribers,created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))""",
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))""",
             (
                 pet_id,
                 data.get("name", "").strip(),
@@ -1633,7 +1682,8 @@ async def handle_admin_pet_new_post(request: web.Request) -> web.Response:
                 int(data.get("price") or 0),
                 data.get("color", "").strip(),
                 data.get("description", "").strip(),
-                data.get("image", "").strip(),
+                image,
+                photos_json,
                 1 if data.get("available") else 0,
                 data.get("telegram_url", "").strip(),
                 data.get("phone", "").strip(),
@@ -1689,11 +1739,19 @@ async def handle_admin_pet_edit_post(request: web.Request) -> web.Response:
         pet.update(dict(data))
         return web.Response(text=_pet_form_html(pet, "Имя и порода обязательны"), content_type="text/html")
 
+    import json as _json
+    photo_urls = []
+    for i in range(10):
+        url = data.get(f"photo_{i}", "").strip()
+        if url:
+            photo_urls.append(url)
+    image = photo_urls[0] if photo_urls else data.get("image", "").strip()
+    photos_json = _json.dumps(photo_urls, ensure_ascii=False)
     conn = get_db()
     try:
         conn.execute(
             """UPDATE pets SET name=?,breed=?,mode=?,age_months=?,gender=?,price=?,color=?,
-            description=?,image=?,available=?,telegram_url=?,phone=?,email=?,
+            description=?,image=?,photos=?,available=?,telegram_url=?,phone=?,email=?,
             is_promoted=?,has_kennel_landing=?,kennel_name=?,kennel_id=?,
             show_to_subscribers=? WHERE id=?""",
             (
@@ -1705,7 +1763,8 @@ async def handle_admin_pet_edit_post(request: web.Request) -> web.Response:
                 int(data.get("price") or 0),
                 data.get("color", "").strip(),
                 data.get("description", "").strip(),
-                data.get("image", "").strip(),
+                image,
+                photos_json,
                 1 if data.get("available") else 0,
                 data.get("telegram_url", "").strip(),
                 data.get("phone", "").strip(),

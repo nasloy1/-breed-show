@@ -994,3 +994,50 @@ button { cursor: pointer; border: none; background: none; font: inherit; }
 .add-success__icon { font-size: 3.5rem; }
 .add-success__title { font-size: 1.15rem; font-weight: 700; color: var(--text); }
 .add-success__text { font-size: .88rem; color: var(--text-secondary); line-height: 1.5; }
+
+/* ---- Photo gallery ---- */
+.gallery-track {
+  display: flex;
+  overflow-x: scroll;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.gallery-track::-webkit-scrollbar { display: none; }
+.gallery-slide {
+  flex: 0 0 100%;
+  scroll-snap-align: start;
+}
+.gallery-slide img { width: 100%; display: block; }
+.gallery-dots {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 5px;
+  z-index: 5;
+}
+.gallery-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.5);
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.gallery-dot.active { background: #fff; }
+/* Add photo button */
+.add-more-photo-btn {
+  margin-top: 8px;
+  padding: 8px 14px;
+  border: 1.5px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--btn);
+  font-size: .85rem;
+  font-weight: 600;
+  cursor: pointer;
+  width: 100%;
+}
+.add-more-photo-btn:hover { background: var(--btn-soft); }
+.add-photo-item { margin-bottom: 8px; }

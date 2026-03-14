@@ -735,17 +735,33 @@ async function renderDetail(petId) {
   const promoBadge = pet.is_promoted ? `<span class="badge badge-promo">🔥 ТОП</span>` : '';
   const kennelBadge = pet.has_kennel_landing ? `<span class="badge badge-kennel">⭐ Питомник</span>` : '';
 
+  // Build gallery
+  const allPhotos = (pet.photos && pet.photos.length > 0) ? pet.photos : (pet.image ? [pet.image] : []);
+  let galleryHtml;
+  if (allPhotos.length === 0) {
+    galleryHtml = `<div class="detail-img-wrap"><div class="detail-img-placeholder">${pet.mode === 'dogs' ? '🐶' : '🐱'}</div></div>`;
+  } else if (allPhotos.length === 1) {
+    galleryHtml = `<div class="detail-img-wrap">
+      <img class="detail-img" src="${escHtml(allPhotos[0])}" alt="${escHtml(pet.name)}" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22600%22 height=%22400%22><rect fill=%22%23e8eef5%22 width=%22600%22 height=%22400%22/><text x=%2250%25%22 y=%2250%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 font-size=%2272%22>${pet.mode === 'dogs' ? '🐶' : '🐱'}</text></svg>'">
+      ${(promoBadge || kennelBadge) ? `<div class="pet-badges pet-badges--detail">${promoBadge}${kennelBadge}</div>` : ''}
+    </div>`;
+  } else {
+    const slides = allPhotos.map(url =>
+      `<div class="gallery-slide"><img class="detail-img" src="${escHtml(url)}" alt="" onerror="this.style.display='none'"></div>`
+    ).join('');
+    const dots = allPhotos.map((_, i) =>
+      `<span class="gallery-dot${i === 0 ? ' active' : ''}" data-idx="${i}"></span>`
+    ).join('');
+    galleryHtml = `<div class="detail-img-wrap">
+      <div class="gallery-track" id="galleryTrack">${slides}</div>
+      <div class="gallery-dots" id="galleryDots">${dots}</div>
+      ${(promoBadge || kennelBadge) ? `<div class="pet-badges pet-badges--detail">${promoBadge}${kennelBadge}</div>` : ''}
+    </div>`;
+  }
+
   container.innerHTML = `
     <div class="detail-card">
-      <div class="detail-img-wrap">
-        <img
-          class="detail-img"
-          src="${escHtml(pet.image)}"
-          alt="${escHtml(pet.name)}"
-          onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22600%22 height=%22400%22><rect fill=%22%23e8eef5%22 width=%22600%22 height=%22400%22/><text x=%2250%25%22 y=%2250%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 font-size=%2272%22>${pet.mode === 'dogs' ? '🐶' : '🐱'}</text></svg>'"
-        >
-        ${(promoBadge || kennelBadge) ? `<div class="pet-badges pet-badges--detail">${promoBadge}${kennelBadge}</div>` : ''}
-      </div>
+      ${galleryHtml}
 
       <div class="detail-body">
         <div class="detail-header-row">
@@ -797,6 +813,26 @@ async function renderDetail(petId) {
       </div>
     </div>
   `;
+
+  // Bind gallery scroll dots
+  if (allPhotos.length > 1) {
+    const track = document.getElementById('galleryTrack');
+    const dotsEl = document.getElementById('galleryDots');
+    if (track && dotsEl) {
+      track.addEventListener('scroll', () => {
+        const idx = Math.round(track.scrollLeft / track.offsetWidth);
+        dotsEl.querySelectorAll('.gallery-dot').forEach((d, i) => {
+          d.classList.toggle('active', i === idx);
+        });
+      }, { passive: true });
+      dotsEl.querySelectorAll('.gallery-dot').forEach(d => {
+        d.addEventListener('click', () => {
+          const i = parseInt(d.dataset.idx, 10);
+          track.scrollTo({ left: i * track.offsetWidth, behavior: 'smooth' });
+        });
+      });
+    }
+  }
 
   // Bind Telegram contact button
   const tgBtn = document.getElementById('btnContactTg');
@@ -1199,12 +1235,16 @@ function renderAdd() {
     <div class="add-card">
       <div class="add-card__title">Фото</div>
       <div class="add-field">
-        <div class="add-photo-row">
-          <input id="afPhoto" type="url" placeholder="https://… или загрузите файл">
-          <label class="add-upload-btn">📷 <input type="file" accept="image/*" onchange="afUploadPhoto(this)"></label>
+        <div id="afPhotoList">
+          <div class="add-photo-item" data-idx="0">
+            <div class="add-photo-row">
+              <input class="af-photo-url" type="url" placeholder="Фото 1 — URL или загрузите">
+              <label class="add-upload-btn">📷 <input type="file" accept="image/*" onchange="afUploadPhotoIdx(this, 0)"></label>
+            </div>
+          </div>
         </div>
+        <button type="button" class="add-more-photo-btn" id="afAddPhotoBtn" onclick="afAddPhotoField()">+ Добавить фото</button>
         <div class="add-upload-status" id="afUploadStatus"></div>
-        <img id="afPhotoPreview" class="add-photo-preview" alt="">
       </div>
     </div>
 
@@ -1228,12 +1268,7 @@ function renderAdd() {
     <button class="add-submit-btn" id="afSubmitBtn" onclick="afSubmit()">Отправить заявку</button>
   `;
 
-  document.getElementById('afPhoto').addEventListener('input', function () {
-    const img = document.getElementById('afPhotoPreview');
-    img.src = this.value;
-    img.style.display = this.value ? 'block' : 'none';
-  });
-
+  window._afPhotoCount = 1;
   window._afGender = 'male';
 }
 
@@ -1243,7 +1278,27 @@ window.afSetGender = function(g) {
   document.getElementById('afGFemale').classList.toggle('active', g === 'female');
 };
 
-window.afUploadPhoto = async function(input) {
+window.afAddPhotoField = function() {
+  if (window._afPhotoCount >= 10) return;
+  const idx = window._afPhotoCount;
+  const list = document.getElementById('afPhotoList');
+  if (!list) return;
+  const div = document.createElement('div');
+  div.className = 'add-photo-item';
+  div.dataset.idx = idx;
+  div.innerHTML = `<div class="add-photo-row">
+    <input class="af-photo-url" type="url" placeholder="Фото ${idx + 1} — URL или загрузите">
+    <label class="add-upload-btn">📷 <input type="file" accept="image/*" onchange="afUploadPhotoIdx(this, ${idx})"></label>
+  </div>`;
+  list.appendChild(div);
+  window._afPhotoCount++;
+  if (window._afPhotoCount >= 10) {
+    const btn = document.getElementById('afAddPhotoBtn');
+    if (btn) btn.style.display = 'none';
+  }
+};
+
+window.afUploadPhotoIdx = async function(input, idx) {
   if (!input.files || !input.files[0]) return;
   const status = document.getElementById('afUploadStatus');
   status.textContent = '⏳ Загружаю…';
@@ -1256,9 +1311,9 @@ window.afUploadPhoto = async function(input) {
     const resp = await fetch(TG_API_URL + '/api/upload-public', { method: 'POST', body: form, headers });
     const data = await resp.json();
     if (data && data.url) {
-      document.getElementById('afPhoto').value = data.url;
-      const img = document.getElementById('afPhotoPreview');
-      img.src = data.url; img.style.display = 'block';
+      const list = document.getElementById('afPhotoList');
+      const items = list ? list.querySelectorAll('.af-photo-url') : [];
+      if (items[idx]) items[idx].value = data.url;
       status.textContent = '✅ Загружено'; status.style.color = 'var(--success)';
     } else {
       status.textContent = '❌ ' + (data.error || 'Ошибка'); status.style.color = 'var(--danger)';
@@ -1282,6 +1337,8 @@ window.afSubmit = async function() {
   const btn = document.getElementById('afSubmitBtn');
   btn.disabled = true; btn.textContent = 'Отправляю…';
 
+  const photoInputs = document.querySelectorAll('#afPhotoList .af-photo-url');
+  const photoUrls = Array.from(photoInputs).map(el => el.value.trim()).filter(Boolean);
   const payload = {
     mode: state.mode,
     breed,
@@ -1291,7 +1348,7 @@ window.afSubmit = async function() {
     gender: window._afGender || 'male',
     price: parseInt(document.getElementById('afPrice')?.value) || 0,
     description: desc,
-    photo_url: (document.getElementById('afPhoto')?.value || '').trim(),
+    photo_url: photoUrls[0] || '',
     contact_telegram: telegram,
     contact_phone: (document.getElementById('afPhone')?.value || '').trim(),
     kennel_name: (document.getElementById('afKennel')?.value || '').trim(),
