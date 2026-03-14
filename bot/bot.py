@@ -748,8 +748,11 @@ def make_start_handler(bot_mode: str):
             share_text = urllib.parse.quote("Смотрите питомцев на Breed Show!")
             share_url = f"https://t.me/share/url?url={urllib.parse.quote(bot_link)}&text={share_text}"
 
+            other_username = BOT_USERNAME_DOGS if bot_mode == "cats" else BOT_USERNAME_CATS
+            other_label = "🐶 Смотреть щенков" if bot_mode == "cats" else "🐱 Смотреть котят"
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton(btn_label, web_app=WebAppInfo(url=url))],
+                [InlineKeyboardButton(other_label, url=f"https://t.me/{other_username}")],
                 [InlineKeyboardButton("📢 Поделиться", url=share_url)],
             ])
             await update.message.reply_text(text, reply_markup=keyboard)
